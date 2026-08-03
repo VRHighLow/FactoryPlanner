@@ -1,23 +1,23 @@
-//! Online multiplayer via public MQTT broker (UK↔USA, code only).
+//! Online multiplayer via WebRTC (peer-to-peer after public signaling).
 //!
-//! Design (fixes choppy cursors + place desync on lossy public brokers):
-//! - Host is authoritative for the world (place/remove/move/rotate/links)
-//! - Clients send requests; host applies + broadcasts
-//! - Host sends a full SNAP periodically so peers always converge
-//! - Cursors use an unreliable channel; receivers extrapolate with velocity
+//! Signaling uses a public Matchbox server; game traffic (cursors + world)
+//! flows directly between peers — not through a lossy public MQTT broker.
+//! That removes the jitter that caused choppy cursors and place desync.
 
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::collections::hash_map::DefaultHasher;
+use std::hash::{Hash, Hasher};
 use std::sync::mpsc::{self, Receiver, Sender, TryRecvError};
-use std::sync::Arc;
 use std::thread;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
-use rumqttc::{Client, Event, MqttOptions, Packet, QoS};
+use futures_util::FutureExt;
+use matchbox_socket::{
+    ChannelConfig, PeerId, PeerState, WebRtcSocket, WebRtcSocketBuilder,
+};
 
 use crate::sim::{BuildingKind, Facing};
 
-const DEFAULT_MQTT_HOST: &str = "broker.emqx.io";
-const DEFAULT_MQTT_PORT: u16 = 1883;
+const DEFAULT_SIGNALING: &str = "wss://match-0-9.helsing.studio";
 
 #[derive(Clone, Debug)]
 pub enum NetEvent {
@@ -25,7 +25,6 @@ pub enum NetEvent {
     Joined { player_id: u8 },
     JoinFailed { reason: String },
     PeerHello { id: u8 },
-    /// Client→host: please place this building (host assigns id).
     PlaceRequest {
         kind: BuildingKind,
         x: f32,
@@ -42,7 +41,6 @@ pub enum NetEvent {
         to_node: u32,
         to_port: usize,
     },
-    /// Ask host for a snapshot (clients).
     WantSnap,
     PeerCursor {
         id: u8,
@@ -69,7 +67,6 @@ pub enum NetEvent {
         to_node: u32,
         to_port: usize,
     },
-    /// Full world wipe then rebuild from following PeerPlace/PeerLink until SnapEnd.
     SnapBegin,
     SnapEnd,
     PeerGone { id: u8 },
@@ -88,14 +85,12 @@ pub enum NetCommand {
         facing: Facing,
         t_ms: f32,
     },
-    /// Host→all or client→host request (see `as_request`).
     Place {
         id: u32,
         kind: BuildingKind,
         x: f32,
         y: f32,
         facing: Facing,
-        /// If true, this is a client request (no id yet / ignore id).
         request: bool,
     },
     Remove { id: u32, request: bool },
@@ -130,13 +125,8 @@ pub struct NetHandle {
     pub join_addr: String,
 }
 
-fn mqtt_endpoint() -> (String, u16) {
-    let host = std::env::var("FACTORY_MQTT_HOST").unwrap_or_else(|_| DEFAULT_MQTT_HOST.into());
-    let port = std::env::var("FACTORY_MQTT_PORT")
-        .ok()
-        .and_then(|p| p.parse().ok())
-        .unwrap_or(DEFAULT_MQTT_PORT);
-    (host, port)
+fn signaling_base() -> String {
+    std::env::var("FACTORY_SIGNALING").unwrap_or_else(|_| DEFAULT_SIGNALING.into())
 }
 
 fn gen_code() -> String {
@@ -148,12 +138,15 @@ fn gen_code() -> String {
     format!("{:06}", (t % 1_000_000) as u32)
 }
 
-fn topic_world(code: &str) -> String {
-    format!("factoryplanner/v4/{code}/w")
+fn room_url(code: &str) -> String {
+    let base = signaling_base().trim_end_matches('/').to_string();
+    format!("{base}/fp{code}")
 }
 
-fn topic_cursor(code: &str) -> String {
-    format!("factoryplanner/v4/{code}/c")
+fn peer_u8(peer: PeerId) -> u8 {
+    let mut h = DefaultHasher::new();
+    peer.hash(&mut h);
+    (1 + (h.finish() % 200)) as u8
 }
 
 fn kind_opt(k: Option<BuildingKind>) -> String {
@@ -190,7 +183,6 @@ fn parse_peer(raw: &str, local_id: u8, is_host: bool, ev: &Sender<NetEvent>) {
                 t_ms: p[6].parse().unwrap_or(0.0),
             });
         }
-        // Client place request — host only
         Some("PREQ") if p.len() >= 6 && is_host => {
             let owner: u8 = p[1].parse().unwrap_or(255);
             if owner == local_id {
@@ -254,7 +246,6 @@ fn parse_peer(raw: &str, local_id: u8, is_host: bool, ev: &Sender<NetEvent>) {
                 let _ = ev.send(NetEvent::WantSnap);
             }
         }
-        // Authoritative world ops from host (everyone applies; host skips own echo)
         Some("PLACE") if p.len() >= 7 => {
             let owner: u8 = p[1].parse().unwrap_or(255);
             if owner == local_id {
@@ -346,10 +337,7 @@ fn parse_peer(raw: &str, local_id: u8, is_host: bool, ev: &Sender<NetEvent>) {
 fn encode_cmd(local_id: u8, is_host: bool, cmd: &NetCommand) -> Option<(bool, String)> {
     Some(match cmd {
         NetCommand::Stop | NetCommand::Announce => return None,
-        NetCommand::WantSnap => (
-            false,
-            encode(&["WANT", &local_id.to_string()]),
-        ),
+        NetCommand::WantSnap => (false, encode(&["WANT", &local_id.to_string()])),
         NetCommand::SnapBegin => (false, encode(&["SNAP0", &local_id.to_string()])),
         NetCommand::SnapEnd => (false, encode(&["SNAP1", &local_id.to_string()])),
         NetCommand::SetCursor {
@@ -483,13 +471,14 @@ fn encode_cmd(local_id: u8, is_host: bool, cmd: &NetCommand) -> Option<(bool, St
             to_port,
             request,
         } => {
+            let tag = if *power { "P" } else { "B" };
             if *request && !is_host {
                 (
                     false,
                     encode(&[
                         "LREQ",
                         &local_id.to_string(),
-                        if *power { "P" } else { "B" },
+                        tag,
                         &from_node.to_string(),
                         &from_port.to_string(),
                         &to_node.to_string(),
@@ -502,7 +491,7 @@ fn encode_cmd(local_id: u8, is_host: bool, cmd: &NetCommand) -> Option<(bool, St
                     encode(&[
                         "LINK",
                         &local_id.to_string(),
-                        if *power { "P" } else { "B" },
+                        tag,
                         &from_node.to_string(),
                         &from_port.to_string(),
                         &to_node.to_string(),
@@ -514,169 +503,172 @@ fn encode_cmd(local_id: u8, is_host: bool, cmd: &NetCommand) -> Option<(bool, St
     })
 }
 
-fn publish_retry(client: &Client, topic: &str, qos: QoS, msg: &str, tries: u32) -> bool {
-    for _ in 0..tries {
-        if client.publish(topic, qos, false, msg.as_bytes()).is_ok() {
-            return true;
-        }
-        thread::sleep(Duration::from_millis(3));
+fn broadcast(socket: &mut WebRtcSocket<matchbox_socket::MultipleChannels>, channel: usize, msg: &str) {
+    let packet: Box<[u8]> = msg.as_bytes().to_vec().into_boxed_slice();
+    let peers: Vec<PeerId> = socket.connected_peers().collect();
+    for peer in peers {
+        let _ = socket.channel_mut(channel).try_send(packet.clone(), peer);
     }
-    false
 }
 
-fn run_mqtt(
-    is_host: bool,
-    code: String,
-    local_id: u8,
-    ev_tx: Sender<NetEvent>,
-    cmd_rx: Receiver<NetCommand>,
-) {
-    let (host, port) = mqtt_endpoint();
-    let client_id = format!(
-        "fp{}{}{}",
-        code,
-        local_id,
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_millis() % 100_000)
-            .unwrap_or(0)
-    );
-    let mut opts = MqttOptions::new(client_id, &host, port);
-    opts.set_keep_alive(Duration::from_secs(15));
-    opts.set_clean_session(true);
+fn run_webrtc(is_host: bool, code: String, local_id: u8, ev_tx: Sender<NetEvent>, cmd_rx: Receiver<NetCommand>) {
+    let url = room_url(&code);
+    let signaling = signaling_base();
 
-    let (client, mut connection) = Client::new(opts, 8192);
-    let tw = topic_world(&code);
-    let tc = topic_cursor(&code);
-    if client.subscribe(&tw, QoS::AtLeastOnce).is_err()
-        || client.subscribe(&tc, QoS::AtMostOnce).is_err()
+    let rt = match tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
     {
-        let _ = ev_tx.send(NetEvent::JoinFailed {
-            reason: "subscribe failed".into(),
-        });
-        return;
-    }
+        Ok(rt) => rt,
+        Err(e) => {
+            let _ = ev_tx.send(NetEvent::JoinFailed {
+                reason: format!("runtime error: {e}"),
+            });
+            return;
+        }
+    };
 
-    if is_host {
-        let _ = ev_tx.send(NetEvent::HostReady {
-            code: code.clone(),
-            addr: format!("online via {host}"),
-        });
-        let _ = ev_tx.send(NetEvent::Joined { player_id: 0 });
-        let _ = ev_tx.send(NetEvent::Info(
-            "Session online — share your code worldwide.".into(),
-        ));
-    } else {
-        let _ = ev_tx.send(NetEvent::Joined {
-            player_id: local_id,
-        });
-        let _ = ev_tx.send(NetEvent::Info("Joined — waiting for host sync…".into()));
-    }
+    rt.block_on(async move {
+        let (mut socket, fut) = WebRtcSocketBuilder::new(url.clone())
+            .add_channel(ChannelConfig::reliable())
+            .add_channel(ChannelConfig::unreliable())
+            .build();
 
-    let hello = encode(&[
-        "HELLO",
-        if is_host { "HOST" } else { "CLIENT" },
-        &local_id.to_string(),
-    ]);
-    let _ = publish_retry(&client, &tw, QoS::AtLeastOnce, &hello, 5);
+        let mut loop_fut = tokio::spawn(fut).fuse();
 
-    let stop = Arc::new(AtomicBool::new(false));
-    let stop2 = stop.clone();
-    let tw_pub = tw.clone();
-    let tc_pub = tc.clone();
-    let ev_pub = ev_tx.clone();
-    thread::spawn(move || {
-        let mut last_cursor_send = Instant::now() - Duration::from_secs(1);
+        if is_host {
+            let _ = ev_tx.send(NetEvent::HostReady {
+                code: code.clone(),
+                addr: format!("p2p via {signaling}"),
+            });
+            let _ = ev_tx.send(NetEvent::Joined { player_id: 0 });
+            let _ = ev_tx.send(NetEvent::Info(
+                "Session online — share your code. Waiting for peer…".into(),
+            ));
+        } else {
+            let _ = ev_tx.send(NetEvent::Joined {
+                player_id: local_id,
+            });
+            let _ = ev_tx.send(NetEvent::Info(
+                "Connecting peer-to-peer… (may take a few seconds)".into(),
+            ));
+        }
+
+        let hello = encode(&[
+            "HELLO",
+            if is_host { "HOST" } else { "CLIENT" },
+            &local_id.to_string(),
+        ]);
+
+        let mut announced = false;
+        let mut ticks: u32 = 0;
+
         loop {
-            let first = match cmd_rx.recv() {
-                Ok(c) => c,
-                Err(_) => break,
-            };
-            let mut batch = vec![first];
-            loop {
-                match cmd_rx.try_recv() {
-                    Ok(c) => batch.push(c),
-                    Err(TryRecvError::Empty) => break,
-                    Err(TryRecvError::Disconnected) => {
-                        stop2.store(true, Ordering::SeqCst);
-                        return;
+            futures_util::select! {
+                res = loop_fut => {
+                    let reason = match res {
+                        Ok(Ok(())) => "signaling closed".into(),
+                        Ok(Err(e)) => format!("signaling error: {e}"),
+                        Err(e) => format!("net task join: {e}"),
+                    };
+                    let _ = ev_tx.send(NetEvent::JoinFailed { reason });
+                    break;
+                }
+                default => {}
+            }
+
+            for (peer, state) in socket.update_peers() {
+                match state {
+                    PeerState::Connected => {
+                        let _ = ev_tx.send(NetEvent::Info(format!(
+                            "Peer online ({})",
+                            peer_u8(peer)
+                        )));
+                        let _ = ev_tx.send(NetEvent::PeerHello { id: peer_u8(peer) });
+                        // Introduce ourselves on the reliable channel.
+                        let packet: Box<[u8]> = hello.as_bytes().to_vec().into_boxed_slice();
+                        let _ = socket.channel_mut(0).try_send(packet, peer);
+                        if !is_host {
+                            let want = encode(&["WANT", &local_id.to_string()]);
+                            let packet: Box<[u8]> = want.as_bytes().to_vec().into_boxed_slice();
+                            let _ = socket.channel_mut(0).try_send(packet, peer);
+                        }
+                        announced = true;
+                    }
+                    PeerState::Disconnected => {
+                        let _ = ev_tx.send(NetEvent::PeerGone { id: peer_u8(peer) });
                     }
                 }
             }
 
+            // Reliable world channel
+            for (_peer, packet) in socket.channel_mut(0).receive() {
+                if let Ok(text) = std::str::from_utf8(&packet) {
+                    parse_peer(text, local_id, is_host, &ev_tx);
+                }
+            }
+            // Unreliable cursor channel
+            for (_peer, packet) in socket.channel_mut(1).receive() {
+                if let Ok(text) = std::str::from_utf8(&packet) {
+                    parse_peer(text, local_id, is_host, &ev_tx);
+                }
+            }
+
+            // Outbound commands
+            let mut batch = Vec::new();
+            match cmd_rx.try_recv() {
+                Ok(c) => {
+                    batch.push(c);
+                    loop {
+                        match cmd_rx.try_recv() {
+                            Ok(c) => batch.push(c),
+                            Err(TryRecvError::Empty) => break,
+                            Err(TryRecvError::Disconnected) => return,
+                        }
+                    }
+                }
+                Err(TryRecvError::Empty) => {}
+                Err(TryRecvError::Disconnected) => return,
+            }
+
             let mut latest_cursor: Option<NetCommand> = None;
-            let mut world_ops: Vec<NetCommand> = Vec::new();
             let mut announce = false;
             for cmd in batch {
                 match cmd {
                     NetCommand::Stop => {
                         let bye = encode(&["BYE", &local_id.to_string()]);
-                        let _ = publish_retry(&client, &tw_pub, QoS::AtLeastOnce, &bye, 3);
-                        stop2.store(true, Ordering::SeqCst);
+                        broadcast(&mut socket, 0, &bye);
                         return;
                     }
                     NetCommand::Announce => announce = true,
                     NetCommand::SetCursor { .. } => latest_cursor = Some(cmd),
-                    other => world_ops.push(other),
+                    other => {
+                        if let Some((is_cur, msg)) = encode_cmd(local_id, is_host, &other) {
+                            broadcast(&mut socket, if is_cur { 1 } else { 0 }, &msg);
+                        }
+                    }
                 }
             }
 
-            if announce {
-                let hello = encode(&[
-                    "HELLO",
-                    if is_host { "HOST" } else { "CLIENT" },
-                    &local_id.to_string(),
-                ]);
-                let _ = publish_retry(&client, &tw_pub, QoS::AtLeastOnce, &hello, 5);
+            if announce || (!announced && ticks == 30) {
+                broadcast(&mut socket, 0, &hello);
                 if !is_host {
                     let want = encode(&["WANT", &local_id.to_string()]);
-                    let _ = publish_retry(&client, &tw_pub, QoS::AtLeastOnce, &want, 5);
+                    broadcast(&mut socket, 0, &want);
                 }
+                announced = true;
             }
 
-            for cmd in world_ops {
-                if let Some((_, msg)) = encode_cmd(local_id, is_host, &cmd) {
-                    if !publish_retry(&client, &tw_pub, QoS::AtLeastOnce, &msg, 8) {
-                        let _ = ev_pub.send(NetEvent::Info(
-                            "Warning: world sync publish failed".into(),
-                        ));
-                    }
-                    // Small gap so broker/event-loop can breathe between snap lines.
-                    thread::sleep(Duration::from_millis(1));
-                }
-            }
-
-            // Cap cursor publishes (~30 Hz) — receiver extrapolates between samples.
             if let Some(cmd) = latest_cursor {
-                if last_cursor_send.elapsed() >= Duration::from_millis(33) {
-                    if let Some((_, msg)) = encode_cmd(local_id, is_host, &cmd) {
-                        let _ = client.publish(&tc_pub, QoS::AtMostOnce, false, msg.as_bytes());
-                        last_cursor_send = Instant::now();
-                    }
+                if let Some((_, msg)) = encode_cmd(local_id, is_host, &cmd) {
+                    broadcast(&mut socket, 1, &msg);
                 }
             }
+
+            ticks = ticks.saturating_add(1);
+            tokio::time::sleep(Duration::from_millis(4)).await;
         }
     });
-
-    for notification in connection.iter() {
-        if stop.load(Ordering::SeqCst) {
-            break;
-        }
-        match notification {
-            Ok(Event::Incoming(Packet::Publish(p))) => {
-                if let Ok(text) = std::str::from_utf8(&p.payload) {
-                    parse_peer(text, local_id, is_host, &ev_tx);
-                }
-            }
-            Err(e) => {
-                let _ = ev_tx.send(NetEvent::JoinFailed {
-                    reason: format!("connection lost: {e}"),
-                });
-                break;
-            }
-            _ => {}
-        }
-    }
 }
 
 pub fn start_host() -> NetHandle {
@@ -684,10 +676,10 @@ pub fn start_host() -> NetHandle {
     let (ev_tx, ev_rx) = mpsc::channel();
     let (cmd_tx, cmd_rx) = mpsc::channel::<NetCommand>();
     let code_ret = code.clone();
-    let (host, _) = mqtt_endpoint();
+    let addr = signaling_base();
 
     thread::spawn(move || {
-        run_mqtt(true, code, 0, ev_tx, cmd_rx);
+        run_webrtc(true, code, 0, ev_tx, cmd_rx);
     });
 
     NetHandle {
@@ -695,7 +687,7 @@ pub fn start_host() -> NetHandle {
         tx: cmd_tx,
         is_host: true,
         code: code_ret,
-        join_addr: host,
+        join_addr: addr,
     }
 }
 
@@ -704,7 +696,7 @@ pub fn start_client(_ignored: &str, code: &str) -> NetHandle {
     let (ev_tx, ev_rx) = mpsc::channel();
     let (cmd_tx, cmd_rx) = mpsc::channel::<NetCommand>();
     let code_ret = code.clone();
-    let (host, _) = mqtt_endpoint();
+    let addr = signaling_base();
 
     let local_id: u8 = {
         use std::time::{SystemTime, UNIX_EPOCH};
@@ -722,7 +714,7 @@ pub fn start_client(_ignored: &str, code: &str) -> NetHandle {
             });
             return;
         }
-        run_mqtt(false, code, local_id, ev_tx, cmd_rx);
+        run_webrtc(false, code, local_id, ev_tx, cmd_rx);
     });
 
     NetHandle {
@@ -730,6 +722,6 @@ pub fn start_client(_ignored: &str, code: &str) -> NetHandle {
         tx: cmd_tx,
         is_host: false,
         code: code_ret,
-        join_addr: host,
+        join_addr: addr,
     }
 }

@@ -18,19 +18,19 @@ cargo run --release
 
 ## Multiplayer (online, worldwide)
 
-Both players dial out to a public MQTT relay (`broker.emqx.io`). No LAN, no firewall holes on either side.
+Uses **WebRTC peer-to-peer** (Matchbox signaling). After connect, game traffic goes directly between players — not through a public MQTT broker.
 
-1. Host: **Multiplayer → Host Game** → wait until status says online → copy the **6-digit code** → **Enter World**.
-2. Friend (anywhere): **Multiplayer → Join Game** → type the code → **Connect**.
-3. You should see each other's cursors and placements sync.
+1. Host: **Multiplayer → Host Game** → share the **6-digit code** → **Enter World**.
+2. Friend: **Multiplayer → Join Game** → enter code → **Connect** (wait for “Peer online”).
+3. Cursors and buildings sync over a direct link.
 
-Optional override (advanced):
+Optional override:
 
 ```bash
-FACTORY_MQTT_HOST=broker.emqx.io FACTORY_MQTT_PORT=1883 cargo run --release
+FACTORY_SIGNALING=wss://match-0-9.helsing.studio cargo run --release
 ```
 
-> Prototype relay: messages go through a public broker. Fine for friends testing; not a hardened production server.
+> Both players must use the same game version. First peer connection can take a few seconds (NAT hole-punch).
 
 ## Windows download (after GitHub release)
 
