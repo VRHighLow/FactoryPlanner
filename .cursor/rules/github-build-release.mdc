@@ -1,0 +1,42 @@
+---
+description: When the user says "build", cut a GitHub release with Win/Linux/macOS binaries
+alwaysApply: true
+---
+
+# FactoryPlanner “build” = cut the next GitHub release
+
+When the user says **build** (or “ship it”, “release”, “publish” in that same sense):
+
+1. **Diff since last release tag** (`git describe --tags --abbrev=0` / `git log <last>..HEAD`).
+2. **Summarize** the changes into a short title + notes in the same style as older releases:
+   - Title: `vX.Y.Z — short summary`
+   - Notes: short markdown sections (`## Multiplayer`, `## Fix`, etc.) like `v0.2.9 — host code appears instantly`.
+3. **Bump** `Cargo.toml` patch version (e.g. `0.3.2` → `0.3.3`) unless they named a version.
+4. **Commit** all intended project changes (not junk `src/*.rs:line` stubs, not secrets).
+5. **Publish immediately**:
+   - Push `main`
+   - Create the GitHub Release **first** with title + notes (`gh release create`) so Assets isn’t empty of meaning
+   - Tag `vX.Y.Z` so `.github/workflows/release.yml` builds and uploads bare binaries for:
+     - `factory_planner-linux-x86_64`
+     - `factory_planner-windows-x86_64.exe`
+     - `factory_planner-macos-aarch64`
+     - `factory_planner-macos-x86_64`
+6. **Do not** zip `assets/` into the release. Bare binaries only.
+7. Reply with the release URL. Don’t make the user wait on a silent watch unless they ask.
+
+Preferred order that avoids “tag but no Release / only Source code zip”:
+
+```bash
+# after commit + version bump on main:
+git push origin main
+gh release create "vX.Y.Z" \
+  --title "vX.Y.Z — <summary>" \
+  --notes "$(cat <<'EOF'
+## …
+EOF
+)" \
+  --latest \
+  --target main
+```
+
+`gh release create` creates/pushes the tag; CI then attaches the four binaries. Softprops must use `generate_release_notes: false` so it doesn’t wipe the titled notes.
