@@ -20,8 +20,8 @@ cargo run --release
 
 Gameplay traffic uses **iroh** (P2P + public n0 relays). A short code is only used to exchange an iroh ticket via a public MQTT broker — cursors and world sync do **not** ride MQTT.
 
-1. Host: **Multiplayer → Host Game** → wait until status says ready → copy the **6-digit code** → **Enter World**.
-2. Friend: **Multiplayer → Join Game** → type the code → **Connect**.
+1. Host: **Multiplayer → Host Game** → wait until the **big 6-digit code appears** (not `……`) → share that code → **Enter World**.
+2. Friend: **Multiplayer → Join Game** → type the code → **Connect** (can take up to ~1 minute while it finds the host).
 3. Host status should show a player connected / world synced. Then place buildings.
 
 Both players must use the **same release version**.

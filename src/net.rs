@@ -7,9 +7,9 @@ use std::fmt;
 use std::str::FromStr;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::thread;
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use bytes::Bytes;
 use iroh::address_lookup::memory::MemoryLookup;
@@ -189,6 +189,18 @@ fn topic_ticket(code: &str) -> String {
     format!("factoryplanner/v5/{code}/t")
 }
 
+fn topic_want(code: &str) -> String {
+    format!("factoryplanner/v5/{code}/want")
+}
+
+fn unique_client_id(prefix: &str) -> String {
+    let t = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    format!("{prefix}{t}")
+}
+
 fn looks_like_ticket(s: &str) -> bool {
     let s = s.trim();
     s.len() >= 40
@@ -196,47 +208,14 @@ fn looks_like_ticket(s: &str) -> bool {
             .all(|c| matches!(c, 'a'..='z' | 'A'..='Z' | '2'..='7'))
 }
 
-fn mqtt_publish_ticket(code: &str, ticket: &str) -> Result<(), String> {
-    let (host, port) = mqtt_endpoint();
-    let client_id = format!(
-        "fpht{}{}",
-        code,
-        Instant::now().elapsed().as_nanos() % 100_000
-    );
-    let mut opts = MqttOptions::new(client_id, host, port);
-    opts.set_keep_alive(Duration::from_secs(15));
-    opts.set_clean_session(true);
-    let (client, mut connection) = Client::new(opts, 64);
-    let topic = topic_ticket(code);
-    client
-        .publish(&topic, QoS::AtLeastOnce, true, ticket.as_bytes())
-        .map_err(|e| format!("mqtt publish: {e}"))?;
-    let deadline = Instant::now() + Duration::from_secs(10);
-    for notification in connection.iter() {
-        if Instant::now() > deadline {
-            break;
-        }
-        match notification {
-            Ok(MqttEvent::Incoming(Packet::PubAck(_))) => return Ok(()),
-            Ok(MqttEvent::Outgoing(_)) => {}
-            Ok(MqttEvent::Incoming(Packet::ConnAck(_))) => {}
-            Err(e) => return Err(format!("mqtt: {e}")),
-            _ => {}
-        }
-    }
-    // Best-effort: broker may have accepted even if we missed PubAck.
-    Ok(())
-}
-
 fn mqtt_clear_ticket(code: &str) {
     let (host, port) = mqtt_endpoint();
-    let client_id = format!("fpclr{}{}", code, Instant::now().elapsed().as_nanos() % 99_999);
-    let mut opts = MqttOptions::new(client_id, host, port);
+    let mut opts = MqttOptions::new(unique_client_id("fpclr"), host, port);
     opts.set_keep_alive(Duration::from_secs(10));
     let (client, mut connection) = Client::new(opts, 16);
     let topic = topic_ticket(code);
     let _ = client.publish(&topic, QoS::AtLeastOnce, true, b"");
-    let deadline = Instant::now() + Duration::from_secs(3);
+    let deadline = Instant::now() + Duration::from_secs(4);
     for notification in connection.iter() {
         if Instant::now() > deadline {
             break;
@@ -250,40 +229,200 @@ fn mqtt_clear_ticket(code: &str) {
     }
 }
 
-fn mqtt_fetch_ticket(code: &str) -> Result<String, String> {
-    let (host, port) = mqtt_endpoint();
-    let client_id = format!(
-        "fpjt{}{}",
-        code,
-        Instant::now().elapsed().as_nanos() % 100_000
-    );
-    let mut opts = MqttOptions::new(client_id, host, port);
-    opts.set_keep_alive(Duration::from_secs(15));
-    opts.set_clean_session(true);
-    let (client, mut connection) = Client::new(opts, 64);
-    let topic = topic_ticket(code);
-    client
-        .subscribe(&topic, QoS::AtLeastOnce)
-        .map_err(|e| format!("mqtt subscribe: {e}"))?;
-    let deadline = Instant::now() + Duration::from_secs(15);
-    for notification in connection.iter() {
-        if Instant::now() > deadline {
-            return Err("no host found for that code (timed out)".into());
+/// Host beacon: stay connected, keep a retained ticket, re-publish when joiners poke `/want`.
+/// Signals `ready_tx` once the first PubAck is confirmed (or on hard failure).
+fn run_ticket_beacon(
+    code: String,
+    ticket_holder: Arc<Mutex<String>>,
+    stop: Arc<AtomicBool>,
+    ready_tx: Sender<Result<(), String>>,
+) {
+    let mut announced = false;
+    let announce = |ready_tx: &Sender<Result<(), String>>, announced: &mut bool, r: Result<(), String>| {
+        if !*announced {
+            *announced = true;
+            let _ = ready_tx.send(r);
         }
-        match notification {
-            Ok(MqttEvent::Incoming(Packet::Publish(p))) => {
-                if p.topic == topic {
-                    let s = String::from_utf8_lossy(&p.payload).trim().to_string();
-                    if !s.is_empty() {
-                        return Ok(s);
+    };
+
+    while !stop.load(Ordering::SeqCst) {
+        let (host, port) = mqtt_endpoint();
+        let mut opts = MqttOptions::new(unique_client_id(&format!("fpht{code}")), host, port);
+        opts.set_keep_alive(Duration::from_secs(20));
+        opts.set_clean_session(true);
+        let (client, mut connection) = Client::new(opts, 128);
+        let t_ticket = topic_ticket(&code);
+        let t_want = topic_want(&code);
+
+        if client.subscribe(&t_want, QoS::AtLeastOnce).is_err() {
+            announce(
+                &ready_tx,
+                &mut announced,
+                Err("mqtt subscribe failed".into()),
+            );
+            thread::sleep(Duration::from_secs(2));
+            continue;
+        }
+
+        let payload = ticket_holder
+            .lock()
+            .map(|g| g.clone())
+            .unwrap_or_default();
+        if payload.is_empty() {
+            thread::sleep(Duration::from_millis(200));
+            continue;
+        }
+        if client
+            .publish(&t_ticket, QoS::AtLeastOnce, true, payload.as_bytes())
+            .is_err()
+        {
+            announce(
+                &ready_tx,
+                &mut announced,
+                Err("mqtt publish failed".into()),
+            );
+            thread::sleep(Duration::from_secs(2));
+            continue;
+        }
+
+        let mut got_ack = false;
+        let mut last_refresh = Instant::now();
+        let connect_started = Instant::now();
+        let session_deadline = Instant::now() + Duration::from_secs(3600);
+
+        for notification in connection.iter() {
+            if stop.load(Ordering::SeqCst) {
+                return;
+            }
+            if Instant::now() > session_deadline {
+                break;
+            }
+            // First publish must ack quickly or we retry the whole connection.
+            if !got_ack && connect_started.elapsed() >= Duration::from_secs(15) {
+                break;
+            }
+            match notification {
+                Ok(MqttEvent::Incoming(Packet::PubAck(_))) => {
+                    if !got_ack {
+                        got_ack = true;
+                        announce(&ready_tx, &mut announced, Ok(()));
                     }
                 }
+                Ok(MqttEvent::Incoming(Packet::Publish(p))) => {
+                    // Joiner poked /want — push fresh retained ticket.
+                    if p.topic == t_want {
+                        if let Ok(g) = ticket_holder.lock() {
+                            let _ = client.publish(
+                                &t_ticket,
+                                QoS::AtLeastOnce,
+                                true,
+                                g.as_bytes(),
+                            );
+                        }
+                    }
+                }
+                Ok(MqttEvent::Incoming(Packet::ConnAck(_))) => {}
+                Err(_) => break,
+                _ => {}
             }
-            Err(e) => return Err(format!("mqtt: {e}")),
-            _ => {}
+
+            // Periodic refresh of retained ticket (addresses can improve).
+            if got_ack && last_refresh.elapsed() >= Duration::from_secs(15) {
+                if let Ok(g) = ticket_holder.lock() {
+                    let _ = client.publish(&t_ticket, QoS::AtLeastOnce, true, g.as_bytes());
+                }
+                last_refresh = Instant::now();
+            }
+        }
+
+        if !got_ack {
+            announce(
+                &ready_tx,
+                &mut announced,
+                Err("could not publish session code (MQTT ack timeout)".into()),
+            );
+            thread::sleep(Duration::from_secs(2));
         }
     }
-    Err("no host found for that code".into())
+}
+
+/// Start host ticket beacon; blocks until first retained publish is acknowledged.
+fn start_ticket_beacon(
+    code: &str,
+    ticket_text: String,
+) -> Result<(Arc<Mutex<String>>, Arc<AtomicBool>), String> {
+    let holder = Arc::new(Mutex::new(ticket_text));
+    let stop = Arc::new(AtomicBool::new(false));
+    let (ready_tx, ready_rx) = mpsc::channel();
+    {
+        let code = code.to_string();
+        let holder = holder.clone();
+        let stop = stop.clone();
+        thread::spawn(move || run_ticket_beacon(code, holder, stop, ready_tx));
+    }
+    match ready_rx.recv_timeout(Duration::from_secs(45)) {
+        Ok(Ok(())) => Ok((holder, stop)),
+        Ok(Err(e)) => {
+            stop.store(true, Ordering::SeqCst);
+            Err(e)
+        }
+        Err(_) => {
+            stop.store(true, Ordering::SeqCst);
+            Err("timed out publishing session code — check network / MQTT".into())
+        }
+    }
+}
+
+fn mqtt_fetch_ticket(code: &str, ev_tx: &Sender<NetEvent>) -> Result<String, String> {
+    let overall = Instant::now() + Duration::from_secs(75);
+    let t_ticket = topic_ticket(code);
+    let t_want = topic_want(code);
+    let mut attempt = 0u32;
+
+    while Instant::now() < overall {
+        attempt += 1;
+        let _ = ev_tx.send(NetEvent::Info(format!(
+            "Looking up code (try {attempt})…"
+        )));
+
+        let (host, port) = mqtt_endpoint();
+        let mut opts = MqttOptions::new(unique_client_id(&format!("fpjt{code}")), host, port);
+        opts.set_keep_alive(Duration::from_secs(15));
+        opts.set_clean_session(true);
+        let (client, mut connection) = Client::new(opts, 64);
+
+        if client.subscribe(&t_ticket, QoS::AtLeastOnce).is_err() {
+            thread::sleep(Duration::from_secs(2));
+            continue;
+        }
+        // Poke host so a live beacon re-publishes even if retain was lost.
+        let _ = client.publish(&t_want, QoS::AtLeastOnce, false, b"1");
+
+        let try_deadline = Instant::now() + Duration::from_secs(12);
+        for notification in connection.iter() {
+            if Instant::now() > try_deadline {
+                break;
+            }
+            match notification {
+                Ok(MqttEvent::Incoming(Packet::Publish(p))) => {
+                    if p.topic == t_ticket {
+                        let s = String::from_utf8_lossy(&p.payload).trim().to_string();
+                        if !s.is_empty() {
+                            return Ok(s);
+                        }
+                    }
+                }
+                Err(_) => break,
+                _ => {}
+            }
+        }
+        thread::sleep(Duration::from_millis(400));
+    }
+
+    Err(
+        "No host found for that code. Host must wait until the big code appears (same version), then stay in Host lobby or world."
+            .into(),
+    )
 }
 
 fn kind_opt(k: Option<BuildingKind>) -> String {
@@ -638,40 +777,45 @@ async fn run_session(
         .accept(GOSSIP_ALPN, gossip.clone())
         .spawn();
 
-    // Host publishes a ticket that includes the live endpoint address after online().
+    // Host: publish live ticket via MQTT beacon (must PubAck before we show the code).
     let live_ticket = if is_host {
+        let _ = ev_tx.send(NetEvent::Info("Publishing session code…".into()));
         let t = Ticket {
             topic: ticket.topic,
             peers: vec![endpoint.addr()],
         };
         let text = t.to_string();
-        if let Err(e) = mqtt_publish_ticket(&code, &text) {
-            let _ = ev_tx.send(NetEvent::JoinFailed {
-                reason: format!("code publish failed: {e}"),
-            });
-            let _ = router.shutdown().await;
-            return;
-        }
-        // Refresh retained ticket periodically (addr can gain more paths).
-        let code_bg = code.clone();
-        let ep_bg = endpoint.clone();
-        let topic_bg = ticket.topic;
-        let stop_refresh = Arc::new(AtomicBool::new(false));
-        let stop_refresh2 = stop_refresh.clone();
-        thread::spawn(move || {
-            while !stop_refresh2.load(Ordering::SeqCst) {
-                thread::sleep(Duration::from_secs(20));
-                if stop_refresh2.load(Ordering::SeqCst) {
-                    break;
-                }
-                let t = Ticket {
-                    topic: topic_bg,
-                    peers: vec![ep_bg.addr()],
-                };
-                let _ = mqtt_publish_ticket(&code_bg, &t.to_string());
+        match start_ticket_beacon(&code, text) {
+            Ok((holder, stop_beacon)) => {
+                let ep_bg = endpoint.clone();
+                let topic_bg = ticket.topic;
+                let holder_bg = holder.clone();
+                let stop_bg = stop_beacon.clone();
+                thread::spawn(move || {
+                    while !stop_bg.load(Ordering::SeqCst) {
+                        thread::sleep(Duration::from_secs(20));
+                        if stop_bg.load(Ordering::SeqCst) {
+                            break;
+                        }
+                        let t = Ticket {
+                            topic: topic_bg,
+                            peers: vec![ep_bg.addr()],
+                        };
+                        if let Ok(mut g) = holder_bg.lock() {
+                            *g = t.to_string();
+                        }
+                    }
+                });
+                Some(stop_beacon)
             }
-        });
-        Some(stop_refresh)
+            Err(e) => {
+                let _ = ev_tx.send(NetEvent::JoinFailed {
+                    reason: format!("code publish failed: {e}"),
+                });
+                let _ = router.shutdown().await;
+                return;
+            }
+        }
     } else {
         None
     };
@@ -699,7 +843,7 @@ async fn run_session(
         });
         let _ = ev_tx.send(NetEvent::Joined { player_id: 0 });
         let _ = ev_tx.send(NetEvent::Info(
-            "Session ready — share your code (P2P via iroh).".into(),
+            "Code is live — share it now (stay in lobby or world).".into(),
         ));
     } else {
         let _ = ev_tx.send(NetEvent::Joined {
@@ -921,8 +1065,7 @@ pub fn start_client(_ignored: &str, code_or_ticket: &str) -> NetHandle {
                 });
                 return;
             }
-            let _ = ev_tx.send(NetEvent::Info("Looking up session code…".into()));
-            let text = match mqtt_fetch_ticket(&code) {
+            let text = match mqtt_fetch_ticket(&code, &ev_tx) {
                 Ok(t) => t,
                 Err(e) => {
                     let _ = ev_tx.send(NetEvent::JoinFailed { reason: e });
