@@ -57,6 +57,9 @@ pub enum NetEvent {
         selected: Option<BuildingKind>,
         facing: Facing,
         t_ms: f32,
+        dx: f32,
+        dy: f32,
+        dfacing: f32,
     },
     PeerPlace {
         id: u32,
@@ -92,6 +95,9 @@ pub enum NetCommand {
         selected: Option<BuildingKind>,
         facing: Facing,
         t_ms: f32,
+        dx: f32,
+        dy: f32,
+        dfacing: f32,
     },
     Place {
         id: u32,
@@ -449,6 +455,21 @@ fn parse_peer(raw: &str, local_id: u8, is_host: bool, ev: &Sender<NetEvent>) {
             if id == local_id {
                 return;
             }
+            let dx = if p.len() >= 10 {
+                p[7].parse().unwrap_or(0.0)
+            } else {
+                p[2].parse().unwrap_or(0.0)
+            };
+            let dy = if p.len() >= 10 {
+                p[8].parse().unwrap_or(0.0)
+            } else {
+                p[3].parse().unwrap_or(0.0)
+            };
+            let dfacing = if p.len() >= 10 {
+                p[9].parse().unwrap_or(0.0)
+            } else {
+                0.0
+            };
             let _ = ev.send(NetEvent::PeerCursor {
                 id,
                 x: p[2].parse().unwrap_or(0.0),
@@ -456,6 +477,9 @@ fn parse_peer(raw: &str, local_id: u8, is_host: bool, ev: &Sender<NetEvent>) {
                 selected: parse_kind(p[4]),
                 facing: Facing::from_u8(p[5].parse().unwrap_or(0)),
                 t_ms: p[6].parse().unwrap_or(0.0),
+                dx,
+                dy,
+                dfacing,
             });
         }
         Some("PREQ") if p.len() >= 6 && is_host => {
@@ -621,6 +645,9 @@ fn encode_cmd(local_id: u8, is_host: bool, cmd: &NetCommand) -> Option<String> {
             selected,
             facing,
             t_ms,
+            dx,
+            dy,
+            dfacing,
         } => encode(&[
             "CUR",
             &local_id.to_string(),
@@ -629,6 +656,9 @@ fn encode_cmd(local_id: u8, is_host: bool, cmd: &NetCommand) -> Option<String> {
             &kind_opt(*selected),
             &facing.as_u8().to_string(),
             &format!("{t_ms:.2}"),
+            &format!("{dx:.2}"),
+            &format!("{dy:.2}"),
+            &format!("{dfacing:.3}"),
         ]),
         NetCommand::Place {
             id,

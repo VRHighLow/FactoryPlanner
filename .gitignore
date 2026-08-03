@@ -1,4 +1,8 @@
 /target/
 /dist/
+/userdata/
 **/*.rs.bk
 .DS_Store
+
+# Cursor/editor accidental path stubs
+src/*:*
