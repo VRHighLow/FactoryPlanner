@@ -187,9 +187,6 @@ impl PortKind {
     pub fn is_item_out(self) -> bool {
         matches!(self, Self::ItemOut(_) | Self::AnyOut)
     }
-    pub fn is_item_in(self) -> bool {
-        matches!(self, Self::ItemIn(_) | Self::AnyIn)
-    }
 }
 
 #[derive(Clone, Debug)]

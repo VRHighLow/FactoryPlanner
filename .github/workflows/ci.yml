@@ -1,12 +1,10 @@
-name: release
+name: ci
 
 on:
   push:
-    tags: ["v*"]
-  workflow_dispatch:
-
-permissions:
-  contents: write
+    branches: [main]
+  pull_request:
+    branches: [main]
 
 jobs:
   build:
@@ -44,7 +42,7 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
         with:
-          key: release-${{ matrix.target }}
+          key: ${{ matrix.target }}
 
       - name: Build release
         run: cargo build --release --bin factory_planner --target ${{ matrix.target }}
@@ -59,6 +57,7 @@ jobs:
             BIN="${BIN}.exe"
           fi
           cp "$BIN" "$OUT"
+          # Bundle assets next to the binary for texture loading from CWD.
           mkdir -p package
           cp "$OUT" package/
           cp -r assets package/assets
@@ -77,13 +76,4 @@ jobs:
           path: |
             ${{ matrix.artifact }}
             ${{ matrix.artifact }}.zip
-
-      - uses: softprops/action-gh-release@v2
-        if: startsWith(github.ref, 'refs/tags/')
-        with:
-          files: |
-            ${{ matrix.artifact }}
-            ${{ matrix.artifact }}.zip
-          generate_release_notes: true
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          if-no-files-found: error

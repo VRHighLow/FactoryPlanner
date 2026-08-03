@@ -4,7 +4,7 @@ resolver = "2"
 
 [package]
 name = "factory_planner"
-version = "0.2.9"
+version = "0.3.0"
 edition = "2021"
 description = "Factory planner — dual-lane conveyors, power poles, online multiplayer."
 license = "MIT"

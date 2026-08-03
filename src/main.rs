@@ -47,6 +47,62 @@ enum Screen {
     Game,
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum CornerTool {
+    Build,
+    TechTree,
+    Map,
+    NodeChart,
+}
+
+impl CornerTool {
+    const ALL: [CornerTool; 4] = [
+        Self::Build,
+        Self::TechTree,
+        Self::Map,
+        Self::NodeChart,
+    ];
+
+    fn label(self) -> &'static str {
+        match self {
+            Self::Build => "Build",
+            Self::TechTree => "Tech",
+            Self::Map => "Map",
+            Self::NodeChart => "Nodes",
+        }
+    }
+}
+
+struct Icons {
+    hammer: Option<Texture2D>,
+}
+
+impl Icons {
+    async fn load() -> Self {
+        let hammer = match load_texture("assets/icons/hammer.png").await {
+            Ok(t) => {
+                t.set_filter(FilterMode::Linear);
+                Some(t)
+            }
+            Err(_) => match load_texture(
+                "src/Assets/Icons/hammer-icon-on-black-background-black-flat-style-vector-illustration.png",
+            )
+            .await
+            {
+                Ok(t) => {
+                    t.set_filter(FilterMode::Linear);
+                    Some(t)
+                }
+                Err(e) => {
+                    eprintln!("hammer icon missing: {e}");
+                    None
+                }
+            },
+        };
+        Self { hammer }
+    }
+}
+
 struct PeerPresence {
     id: u8,
     x: f32,
@@ -80,6 +136,19 @@ impl Cam {
     }
 }
 
+#[derive(Clone, Copy)]
+enum ContextTarget {
+    Empty,
+    Building(u32),
+}
+
+#[derive(Clone, Copy)]
+struct ContextMenu {
+    sx: f32,
+    sy: f32,
+    target: ContextTarget,
+}
+
 struct Ui {
     build_open: bool,
     build_category: BuildCategory,
@@ -92,6 +161,15 @@ struct Ui {
     drag_off: (f32, f32),
     panning: bool,
     pan_last: (f32, f32),
+    /// Dragging a building from the build menu onto the hotbar (Factorio-style).
+    palette_drag: Option<BuildingKind>,
+    palette_drag_origin: (f32, f32),
+    /// Rearranging / clearing a hotbar slot by drag.
+    hotbar_drag_from: Option<usize>,
+    hotbar_drag_origin: (f32, f32),
+    context_menu: Option<ContextMenu>,
+    /// Non-build corner-wheel panels (tech / map / node chart).
+    overlay: Option<CornerTool>,
 }
 
 impl Ui {
@@ -108,6 +186,52 @@ impl Ui {
             drag_off: (0.0, 0.0),
             panning: false,
             pan_last: (0.0, 0.0),
+            palette_drag: None,
+            palette_drag_origin: (0.0, 0.0),
+            hotbar_drag_from: None,
+            hotbar_drag_origin: (0.0, 0.0),
+            context_menu: None,
+            overlay: None,
+        }
+    }
+
+    fn clear_tool(&mut self) {
+        self.selected = None;
+        self.wire_from = None;
+        self.palette_drag = None;
+        self.hotbar_drag_from = None;
+    }
+
+    fn open_build(&mut self) {
+        self.build_open = true;
+        self.overlay = None;
+        self.wire_from = None;
+        self.context_menu = None;
+        self.drag_node = None;
+    }
+
+    fn toggle_build(&mut self) {
+        if self.build_open {
+            self.build_open = false;
+            self.palette_drag = None;
+        } else {
+            self.open_build();
+        }
+    }
+
+    fn activate_corner(&mut self, tool: CornerTool) {
+        match tool {
+            CornerTool::Build => self.toggle_build(),
+            other => {
+                self.build_open = false;
+                self.palette_drag = None;
+                if self.overlay == Some(other) {
+                    self.overlay = None;
+                } else {
+                    self.overlay = Some(other);
+                }
+                self.context_menu = None;
+            }
         }
     }
 }
@@ -117,6 +241,7 @@ struct App {
     world: World,
     cam: Cam,
     ui: Ui,
+    icons: Icons,
     net: Option<NetHandle>,
     peers: HashMap<u8, PeerPresence>,
     host_code: String,
@@ -134,7 +259,7 @@ struct App {
 }
 
 impl App {
-    fn new() -> Self {
+    fn new(icons: Icons) -> Self {
         Self {
             screen: Screen::Main,
             world: World::new(),
@@ -144,6 +269,7 @@ impl App {
                 zoom: 1.0,
             },
             ui: Ui::new(),
+            icons,
             net: None,
             peers: HashMap::new(),
             host_code: String::new(),
@@ -198,7 +324,7 @@ fn window_conf() -> Conf {
         window_title: "FactoryPlanner".to_owned(),
         window_width: 1400,
         window_height: 900,
-        high_dpi: true,
+        high_dpi: false,
         platform: miniquad::conf::Platform {
             // Uncap vsync so we can run above 60Hz; we pace to TARGET_FPS ourselves.
             swap_interval: Some(0),
@@ -210,7 +336,8 @@ fn window_conf() -> Conf {
 
 #[macroquad::main(window_conf)]
 async fn main() {
-    let mut app = App::new();
+    let icons = Icons::load().await;
+    let mut app = App::new(icons);
     let frame_budget = std::time::Duration::from_secs_f64(1.0 / TARGET_FPS);
 
     loop {
@@ -230,7 +357,13 @@ async fn main() {
                 let (wx, wy) = app.cam.screen_to_world(mouse.0, mouse.1);
                 handle_hotkeys(&mut app, wx, wy);
                 handle_pan_zoom(&mut app, mouse);
-                handle_world_input(&mut app, mouse, wx, wy);
+                handle_hud_input(&mut app, mouse, wx, wy);
+                if !app.ui.build_open
+                    && app.ui.context_menu.is_none()
+                    && app.ui.overlay.is_none()
+                {
+                    handle_world_input(&mut app, mouse, wx, wy);
+                }
                 send_cursor_if_due(&mut app, wx, wy);
                 advance_peer_cursors(&mut app, dt);
                 app.world.tick(dt);
@@ -623,7 +756,7 @@ fn drain_net(app: &mut App) {
                 app.join_status = format!("Failed: {reason}");
                 app.net = None;
             }
-            NetEvent::PeerHello { .. } | NetEvent::WantSnap => {
+            NetEvent::PeerHello | NetEvent::WantSnap => {
                 if is_host {
                     send_world_snapshot(app);
                     app.last_snap_send = Instant::now();
@@ -841,22 +974,35 @@ fn send_cursor_if_due(app: &mut App, wx: f32, wy: f32) {
 
 fn handle_hotkeys(app: &mut App, wx: f32, wy: f32) {
     if is_key_pressed(KeyCode::B) {
-        app.ui.build_open = !app.ui.build_open;
-        if app.ui.build_open {
-            app.ui.wire_from = None;
-        }
+        app.ui.toggle_build();
     }
     if is_key_pressed(KeyCode::Escape) {
-        if app.ui.build_open {
+        if app.ui.context_menu.take().is_some() {
+            // closed pie / context
+        } else if app.ui.overlay.take().is_some() {
+            // closed corner overlay
+        } else if app.ui.build_open {
             app.ui.build_open = false;
-        } else {
-            app.ui.selected = None;
-            app.ui.wire_from = None;
+            app.ui.palette_drag = None;
+        } else if app.ui.wire_from.take().is_some() || app.ui.selected.take().is_some() {
+            app.ui.hotbar_drag_from = None;
         }
+    }
+    if is_key_pressed(KeyCode::Q) {
+        app.ui.clear_tool();
+        app.ui.context_menu = None;
     }
     if is_key_pressed(KeyCode::R) {
         app.ui.place_facing = app.ui.place_facing.rotate_cw();
         let rotated_id = if let Some(id) = app.ui.drag_node {
+            if app.world.try_rotate_node(id) {
+                Some(id)
+            } else {
+                None
+            }
+        } else if let Some(ContextTarget::Building(id)) =
+            app.ui.context_menu.as_ref().map(|m| m.target)
+        {
             if app.world.try_rotate_node(id) {
                 Some(id)
             } else {
@@ -883,6 +1029,18 @@ fn handle_hotkeys(app: &mut App, wx: f32, wy: f32) {
             }
         }
     }
+    if is_key_pressed(KeyCode::Delete) || is_key_pressed(KeyCode::Backspace) {
+        if let Some(ContextTarget::Building(id)) =
+            app.ui.context_menu.as_ref().map(|m| m.target)
+        {
+            remove_building(app, id);
+            app.ui.context_menu = None;
+        } else if app.ui.context_menu.is_none() && !app.ui.build_open {
+            if let Some(id) = app.world.hit_node(wx, wy) {
+                remove_building(app, id);
+            }
+        }
+    }
 
     for (i, key) in [
         KeyCode::Key1,
@@ -900,13 +1058,16 @@ fn handle_hotkeys(app: &mut App, wx: f32, wy: f32) {
     {
         if is_key_pressed(*key) {
             if app.ui.build_open {
-                if let Some(kind) = app.ui.selected {
+                let kind = app.ui.palette_drag.or(app.ui.selected);
+                if let Some(kind) = kind {
                     app.ui.hotbar[i] = Some(kind);
+                    app.ui.hotbar_index = i;
                 }
             } else {
                 app.ui.hotbar_index = i;
                 app.ui.selected = app.ui.hotbar[i];
                 app.ui.wire_from = None;
+                app.ui.context_menu = None;
             }
         }
     }
@@ -944,13 +1105,49 @@ fn handle_pan_zoom(app: &mut App, mouse: (f32, f32)) {
     }
 }
 
+fn ui_scale() -> f32 {
+    let by_h = screen_height() / 900.0;
+    let by_w = screen_width() / 1400.0;
+    by_h.max(by_w).clamp(1.0, 1.5)
+}
+
+fn s(v: f32) -> f32 {
+    v * ui_scale()
+}
+
+/// Floating hotbar — only as wide as the slots, sits above the bottom edge.
 fn hotbar_geom() -> (f32, f32, f32, f32) {
-    let slot = 56.0;
-    let gap = 8.0;
+    let slot = s(56.0);
+    let gap = s(6.0);
     let width = HOTBAR_SLOTS as f32 * slot + (HOTBAR_SLOTS - 1) as f32 * gap;
-    let bar_x = (screen_width() - width) * 0.5;
-    let bar_y = screen_height() - slot - 18.0;
-    (bar_x, bar_y, slot, gap)
+    let x = (screen_width() - width) * 0.5;
+    let y = screen_height() - slot - s(22.0);
+    (x, y, slot, gap)
+}
+
+/// Vertical tool rail in the bottom-right — icon-only, labels appear on hover.
+fn tool_button_rect(index: usize) -> Rect {
+    let size = s(48.0);
+    let gap = s(10.0);
+    let total_h = 4.0 * size + 3.0 * gap;
+    let x = screen_width() - size - s(18.0);
+    let y0 = screen_height() - total_h - s(22.0);
+    Rect {
+        x,
+        y: y0 + index as f32 * (size + gap),
+        w: size,
+        h: size,
+    }
+}
+
+fn point_in_tool_button(mx: f32, my: f32) -> Option<CornerTool> {
+    for (i, tool) in CornerTool::ALL.iter().enumerate() {
+        let r = tool_button_rect(i);
+        if mx >= r.x && mx <= r.x + r.w && my >= r.y && my <= r.y + r.h {
+            return Some(*tool);
+        }
+    }
+    None
 }
 
 fn point_in_hotbar(mx: f32, my: f32) -> Option<usize> {
@@ -965,6 +1162,48 @@ fn point_in_hotbar(mx: f32, my: f32) -> Option<usize> {
         }
     }
     None
+}
+
+fn point_in_hud_chrome(mx: f32, my: f32) -> bool {
+    point_in_hotbar(mx, my).is_some() || point_in_tool_button(mx, my).is_some()
+}
+
+fn kind_swatch(kind: BuildingKind) -> Color {
+    match kind {
+        BuildingKind::Solar => Color::from_rgba(80, 160, 220, 255),
+        BuildingKind::PowerPole => POWER_C,
+        BuildingKind::OreNode => ORE_C,
+        BuildingKind::Smelter => Color::from_rgba(220, 120, 70, 255),
+        BuildingKind::Box => Color::from_rgba(160, 170, 190, 255),
+        BuildingKind::Splitter => BELT_YELLOW,
+    }
+}
+
+fn draw_tech_icon(cx: f32, cy: f32, color: Color) {
+    let u = s(1.0);
+    draw_circle(cx, cy - 5.5 * u, 3.0 * u, color);
+    draw_circle(cx - 7.5 * u, cy + 5.0 * u, 3.0 * u, color);
+    draw_circle(cx + 7.5 * u, cy + 5.0 * u, 3.0 * u, color);
+    draw_line(cx, cy - 5.5 * u, cx - 7.5 * u, cy + 5.0 * u, 1.7 * u, color);
+    draw_line(cx, cy - 5.5 * u, cx + 7.5 * u, cy + 5.0 * u, 1.7 * u, color);
+}
+
+fn draw_map_icon(cx: f32, cy: f32, color: Color) {
+    let u = s(1.0);
+    draw_rectangle_lines(cx - 9.0 * u, cy - 7.5 * u, 18.0 * u, 15.0 * u, 1.7 * u, color);
+    draw_line(cx - 3.0 * u, cy - 7.5 * u, cx - 3.0 * u, cy + 7.5 * u, 1.4 * u, color);
+    draw_line(cx + 3.0 * u, cy - 7.5 * u, cx + 3.0 * u, cy + 7.5 * u, 1.4 * u, color);
+    draw_line(cx - 9.0 * u, cy - 1.0 * u, cx + 9.0 * u, cy + 1.5 * u, 1.4 * u, color);
+}
+
+fn draw_nodes_icon(cx: f32, cy: f32, color: Color) {
+    let u = s(1.0);
+    draw_circle(cx - 7.5 * u, cy - 5.0 * u, 3.2 * u, color);
+    draw_circle(cx + 7.5 * u, cy - 5.0 * u, 3.2 * u, color);
+    draw_circle(cx, cy + 7.5 * u, 3.2 * u, color);
+    draw_line(cx - 7.5 * u, cy - 5.0 * u, cx + 7.5 * u, cy - 5.0 * u, 1.6 * u, color);
+    draw_line(cx - 7.5 * u, cy - 5.0 * u, cx, cy + 7.5 * u, 1.6 * u, color);
+    draw_line(cx + 7.5 * u, cy - 5.0 * u, cx, cy + 7.5 * u, 1.6 * u, color);
 }
 
 fn build_menu_rect() -> Rect {
@@ -1058,26 +1297,245 @@ fn connect_ports_net(app: &mut App, from: (u32, usize), to: (u32, usize)) {
     }
 }
 
-fn handle_world_input(app: &mut App, mouse: (f32, f32), wx: f32, wy: f32) {
-    if app.ui.build_open || app.ui.panning {
+fn handle_hud_input(app: &mut App, mouse: (f32, f32), wx: f32, wy: f32) {
+    // Finish palette → hotbar drops even while the build menu is open.
+    if is_mouse_button_released(MouseButton::Left) {
+        if let Some(kind) = app.ui.palette_drag.take() {
+            let dx = mouse.0 - app.ui.palette_drag_origin.0;
+            let dy = mouse.1 - app.ui.palette_drag_origin.1;
+            let dragged = dx * dx + dy * dy > 64.0;
+            if let Some(i) = point_in_hotbar(mouse.0, mouse.1) {
+                app.ui.hotbar[i] = Some(kind);
+                app.ui.hotbar_index = i;
+            } else if !dragged {
+                // Click (not drag): equip and close menu.
+                app.ui.selected = Some(kind);
+                app.ui.hotbar[app.ui.hotbar_index] = Some(kind);
+                app.ui.build_open = false;
+                app.ui.wire_from = None;
+            }
+            return;
+        }
+        if let Some(from) = app.ui.hotbar_drag_from.take() {
+            let dx = mouse.0 - app.ui.hotbar_drag_origin.0;
+            let dy = mouse.1 - app.ui.hotbar_drag_origin.1;
+            let dragged = dx * dx + dy * dy > 64.0;
+            if let Some(to) = point_in_hotbar(mouse.0, mouse.1) {
+                if dragged && to != from {
+                    app.ui.hotbar.swap(from, to);
+                }
+                app.ui.hotbar_index = to;
+                app.ui.selected = app.ui.hotbar[to];
+            } else if dragged && !point_in_hud_chrome(mouse.0, mouse.1) {
+                // Dragged off the bar → clear slot.
+                app.ui.hotbar[from] = None;
+                if app.ui.hotbar_index == from {
+                    app.ui.selected = None;
+                }
+            } else {
+                app.ui.hotbar_index = from;
+                app.ui.selected = app.ui.hotbar[from];
+            }
+            return;
+        }
+    }
+
+    if handle_context_menu_input(app, mouse) {
+        return;
+    }
+
+    // Dismiss overlay when clicking outside its panel (wheel still clickable).
+    if app.ui.overlay.is_some() && is_mouse_button_pressed(MouseButton::Left) {
+        if point_in_tool_button(mouse.0, mouse.1).is_none() {
+            let w = 520.0;
+            let h = 360.0;
+            let x = (screen_width() - w) * 0.5;
+            let y = (screen_height() - h) * 0.5 - 40.0;
+            let inside =
+                mouse.0 >= x && mouse.0 <= x + w && mouse.1 >= y && mouse.1 <= y + h;
+            if !inside {
+                app.ui.overlay = None;
+                return;
+            }
+        }
+    }
+
+    if app.ui.panning {
         return;
     }
 
     if is_mouse_button_pressed(MouseButton::Left) {
+        if let Some(tool) = point_in_tool_button(mouse.0, mouse.1) {
+            app.ui.activate_corner(tool);
+            return;
+        }
         if let Some(i) = point_in_hotbar(mouse.0, mouse.1) {
-            app.ui.hotbar_index = i;
-            app.ui.selected = app.ui.hotbar[i];
-            app.ui.wire_from = None;
+            app.ui.context_menu = None;
+            if app.ui.build_open {
+                // While B is open, clicking a slot just highlights it as drop target.
+                app.ui.hotbar_index = i;
+            } else if app.ui.hotbar[i].is_some() {
+                app.ui.hotbar_drag_from = Some(i);
+                app.ui.hotbar_drag_origin = mouse;
+                app.ui.hotbar_index = i;
+                app.ui.selected = app.ui.hotbar[i];
+                app.ui.wire_from = None;
+            } else {
+                // Empty slot: clear tool / select empty.
+                app.ui.hotbar_index = i;
+                app.ui.selected = None;
+                app.ui.wire_from = None;
+            }
             return;
         }
     }
-    if point_in_hotbar(mouse.0, mouse.1).is_some() {
+
+    // Right-click on hotbar slot clears it.
+    if is_mouse_button_pressed(MouseButton::Right) {
+        if let Some(i) = point_in_hotbar(mouse.0, mouse.1) {
+            app.ui.hotbar[i] = None;
+            if app.ui.hotbar_index == i {
+                app.ui.selected = None;
+            }
+            return;
+        }
+    }
+
+    // World right-click → Blender-style context panel (when not on HUD).
+    if !app.ui.build_open
+        && is_mouse_button_pressed(MouseButton::Right)
+        && !point_in_hud_chrome(mouse.0, mouse.1)
+    {
+        if app.ui.wire_from.take().is_some() {
+            return;
+        }
+        if app.ui.selected.take().is_some() {
+            // Right-click cancels active place tool first (clean feel).
+            return;
+        }
+        let target = if let Some(id) = app.world.hit_node(wx, wy) {
+            ContextTarget::Building(id)
+        } else {
+            ContextTarget::Empty
+        };
+        app.ui.context_menu = Some(ContextMenu {
+            sx: mouse.0,
+            sy: mouse.1,
+            target,
+        });
+    }
+}
+
+fn context_items(target: ContextTarget) -> Vec<(&'static str, ContextAction)> {
+    match target {
+        ContextTarget::Empty => vec![
+            ("New", ContextAction::OpenBuild),
+            ("Clear tool", ContextAction::ClearTool),
+        ],
+        ContextTarget::Building(_) => vec![
+            ("Delete", ContextAction::Delete),
+            ("Rotate", ContextAction::Rotate),
+            ("New", ContextAction::OpenBuild),
+        ],
+    }
+}
+
+#[derive(Clone, Copy)]
+enum ContextAction {
+    OpenBuild,
+    ClearTool,
+    Delete,
+    Rotate,
+}
+
+fn context_menu_rect(menu: &ContextMenu) -> Rect {
+    let n = context_items(menu.target).len() as f32;
+    let w = 168.0;
+    let h = 10.0 + n * 34.0;
+    let mut x = menu.sx;
+    let mut y = menu.sy;
+    if x + w > screen_width() - 8.0 {
+        x = screen_width() - w - 8.0;
+    }
+    if y + h > screen_height() - 8.0 {
+        y = screen_height() - h - 8.0;
+    }
+    Rect { x, y, w, h }
+}
+
+fn handle_context_menu_input(app: &mut App, mouse: (f32, f32)) -> bool {
+    let Some(menu) = app.ui.context_menu.clone() else {
+        return false;
+    };
+    let r = context_menu_rect(&menu);
+    let items = context_items(menu.target);
+
+    if is_mouse_button_pressed(MouseButton::Left) {
+        let inside = mouse.0 >= r.x
+            && mouse.0 <= r.x + r.w
+            && mouse.1 >= r.y
+            && mouse.1 <= r.y + r.h;
+        if !inside {
+            app.ui.context_menu = None;
+            return true;
+        }
+        for (i, (_, action)) in items.iter().enumerate() {
+            let y = r.y + 6.0 + i as f32 * 34.0;
+            if mouse.1 >= y && mouse.1 <= y + 30.0 {
+                apply_context_action(app, menu.target, *action);
+                app.ui.context_menu = None;
+                return true;
+            }
+        }
+        return true;
+    }
+    if is_mouse_button_pressed(MouseButton::Right) {
+        app.ui.context_menu = None;
+        return true;
+    }
+    true // swallow world input while open
+}
+
+fn apply_context_action(app: &mut App, target: ContextTarget, action: ContextAction) {
+    match action {
+        ContextAction::OpenBuild => app.ui.open_build(),
+        ContextAction::ClearTool => app.ui.clear_tool(),
+        ContextAction::Delete => {
+            if let ContextTarget::Building(id) = target {
+                remove_building(app, id);
+            }
+        }
+        ContextAction::Rotate => {
+            if let ContextTarget::Building(id) = target {
+                if app.world.try_rotate_node(id) {
+                    if let Some(n) = app.world.nodes.get(&id) {
+                        if let Some(net) = app.net.as_ref() {
+                            let _ = net.tx.send(NetCommand::Rotate {
+                                id,
+                                facing: n.facing,
+                                request: !net.is_host,
+                            });
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+fn handle_world_input(app: &mut App, mouse: (f32, f32), wx: f32, wy: f32) {
+    if app.ui.panning || point_in_hud_chrome(mouse.0, mouse.1) {
         return;
     }
+
+    // Click selected hotbar slot again to unequip (handled when press selects;
+    // toggle here on press over nothing with same selection — skip).
 
     let port_r = PORT_HIT / app.cam.zoom;
 
     if is_mouse_button_pressed(MouseButton::Left) {
+        // Finish equipping a hotbar drag as a click-select if released on same slot
+        // is handled in hud; here: port wiring / place / move.
         if let Some(port) = app.world.hit_port(wx, wy, port_r) {
             if let Some(from) = app.ui.wire_from {
                 if from != port {
@@ -1111,6 +1569,9 @@ fn handle_world_input(app: &mut App, mouse: (f32, f32), wx: f32, wy: f32) {
                 app.ui.drag_off = (wx - n.x, wy - n.y);
                 app.ui.wire_from = None;
             }
+        } else {
+            // Empty ground click unequips place tool.
+            // (Keep selection if actively placing — Factorio keeps it; we toggle off with Q / RMB.)
         }
     }
     if is_mouse_button_released(MouseButton::Left) {
@@ -1134,15 +1595,6 @@ fn handle_world_input(app: &mut App, mouse: (f32, f32), wx: f32, wy: f32) {
                 .try_move_node(id, wx - app.ui.drag_off.0, wy - app.ui.drag_off.1);
         }
     }
-
-    if is_mouse_button_pressed(MouseButton::Right) {
-        if app.ui.wire_from.take().is_some() {
-            return;
-        }
-        if let Some(id) = app.world.hit_node(wx, wy) {
-            remove_building(app, id);
-        }
-    }
 }
 
 fn draw_game(app: &mut App, mouse: (f32, f32), wx: f32, wy: f32) {
@@ -1154,14 +1606,6 @@ fn draw_game(app: &mut App, mouse: (f32, f32), wx: f32, wy: f32) {
     draw_nodes(&app.world, &app.cam);
     draw_placement_ghost(&app.world, &app.ui, &app.cam, wx, wy);
     draw_peer_cursors(app);
-    draw_hotbar(&app.ui);
-    draw_text(
-        "Belts: click item ports to wire  ·  Power: click energy ports",
-        16.0,
-        screen_height() - 12.0,
-        16.0,
-        TEXT_DIM,
-    );
     if let Some(net) = app.net.as_ref() {
         if net.is_host {
             draw_text(
@@ -1176,9 +1620,19 @@ fn draw_game(app: &mut App, mouse: (f32, f32), wx: f32, wy: f32) {
             draw_text(&app.join_status, 16.0, 50.0, 16.0, ACCENT);
         }
     }
+    // Build menu under the hotbar so slots stay visible as drop targets.
     if app.ui.build_open {
         draw_and_handle_build_menu(app, mouse);
     }
+    if let Some(overlay) = app.ui.overlay {
+        draw_corner_overlay(overlay, mouse);
+    }
+    draw_hotbar(&app.ui, mouse);
+    draw_tool_dock(app, mouse);
+    if app.ui.context_menu.is_some() {
+        draw_context_menu(&app.ui, mouse);
+    }
+    draw_drag_ghost(&app.ui, mouse);
 }
 
 fn draw_infinite_grid(cam: &Cam) {
@@ -1530,30 +1984,345 @@ fn draw_peer_cursors(app: &App) {
     }
 }
 
-fn draw_hotbar(ui: &Ui) {
+fn draw_hotbar(ui: &Ui, mouse: (f32, f32)) {
     let (bar_x, bar_y, slot, gap) = hotbar_geom();
+    let width = HOTBAR_SLOTS as f32 * slot + (HOTBAR_SLOTS - 1) as f32 * gap;
+    let pad = s(10.0);
+
+    // Soft floating capsule plate (no full-width bar).
+    draw_rectangle(
+        bar_x - pad,
+        bar_y - pad,
+        width + pad * 2.0,
+        slot + pad * 2.0,
+        Color::from_rgba(12, 14, 18, 170),
+    );
+    draw_rectangle_lines(
+        bar_x - pad,
+        bar_y - pad,
+        width + pad * 2.0,
+        slot + pad * 2.0,
+        1.0,
+        Color::from_rgba(80, 100, 120, 90),
+    );
+
     for i in 0..HOTBAR_SLOTS {
         let x = bar_x + i as f32 * (slot + gap);
-        let selected = i == ui.hotbar_index;
-        draw_rectangle(x, bar_y, slot, slot, PANEL);
+        let selected = i == ui.hotbar_index && ui.selected.is_some() && ui.hotbar[i] == ui.selected;
+        let indexed = i == ui.hotbar_index;
+        let hovered = mouse.0 >= x
+            && mouse.0 <= x + slot
+            && mouse.1 >= bar_y
+            && mouse.1 <= bar_y + slot;
+        let drop_target = ui.palette_drag.is_some() && hovered;
+
+        draw_rectangle(
+            x,
+            bar_y,
+            slot,
+            slot,
+            if drop_target {
+                Color::from_rgba(40, 70, 60, 220)
+            } else if hovered {
+                Color::from_rgba(32, 40, 52, 220)
+            } else {
+                Color::from_rgba(20, 24, 30, 200)
+            },
+        );
         draw_rectangle_lines(
             x,
             bar_y,
             slot,
             slot,
-            if selected { 2.5 } else { 1.2 },
-            if selected { ACCENT } else { NODE_BORDER },
+            if selected || drop_target {
+                2.2
+            } else if indexed {
+                1.6
+            } else {
+                1.0
+            },
+            if drop_target {
+                CYAN
+            } else if selected {
+                ACCENT
+            } else if indexed {
+                Color::from_rgba(180, 150, 90, 180)
+            } else {
+                Color::from_rgba(70, 85, 100, 140)
+            },
         );
+
+        // Quiet key hint
         draw_text(
             &(i + 1).to_string(),
-            x + 6.0,
-            bar_y + 14.0,
-            14.0,
-            TEXT_DIM,
+            x + s(5.0),
+            bar_y + s(14.0),
+            s(12.0),
+            Color::from_rgba(140, 155, 170, 160),
         );
+
         if let Some(kind) = ui.hotbar[i] {
-            draw_text(kind.short(), x + 6.0, bar_y + 34.0, 15.0, TEXT);
+            let dim = ui.hotbar_drag_from == Some(i);
+            let mut swatch = kind_swatch(kind);
+            if dim {
+                swatch.a = 0.35;
+            }
+            // Color chip centered
+            let chip_w = slot - s(18.0);
+            let chip_h = s(10.0);
+            draw_rectangle(
+                x + (slot - chip_w) * 0.5,
+                bar_y + s(20.0),
+                chip_w,
+                chip_h,
+                swatch,
+            );
+            let fs = s(13.0);
+            let label = kind.short();
+            let tw = measure_text(label, None, fs as u16, 1.0).width;
+            draw_text(
+                label,
+                x + (slot - tw) * 0.5,
+                bar_y + slot - s(8.0),
+                fs,
+                if dim {
+                    TEXT_DIM
+                } else {
+                    TEXT
+                },
+            );
         }
+    }
+}
+
+fn draw_tool_dock(app: &App, mouse: (f32, f32)) {
+    // Slim floating rail behind the icons.
+    let top = tool_button_rect(0);
+    let bot = tool_button_rect(3);
+    let rail_pad = s(8.0);
+    draw_rectangle(
+        top.x - rail_pad,
+        top.y - rail_pad,
+        top.w + rail_pad * 2.0,
+        (bot.y + bot.h) - top.y + rail_pad * 2.0,
+        Color::from_rgba(12, 14, 18, 160),
+    );
+    draw_rectangle_lines(
+        top.x - rail_pad,
+        top.y - rail_pad,
+        top.w + rail_pad * 2.0,
+        (bot.y + bot.h) - top.y + rail_pad * 2.0,
+        1.0,
+        Color::from_rgba(80, 100, 120, 80),
+    );
+
+    for (i, tool) in CornerTool::ALL.iter().enumerate() {
+        let r = tool_button_rect(i);
+        let active = match *tool {
+            CornerTool::Build => app.ui.build_open,
+            other => app.ui.overlay == Some(other),
+        };
+        let hovered = mouse.0 >= r.x
+            && mouse.0 <= r.x + r.w
+            && mouse.1 >= r.y
+            && mouse.1 <= r.y + r.h;
+
+        let cx = r.x + r.w * 0.5;
+        let cy = r.y + r.h * 0.5;
+        let radius = r.w * 0.46;
+
+        draw_circle(
+            cx,
+            cy,
+            radius,
+            if active {
+                Color::from_rgba(36, 58, 52, 240)
+            } else if hovered {
+                Color::from_rgba(34, 44, 58, 240)
+            } else {
+                Color::from_rgba(22, 26, 34, 220)
+            },
+        );
+        draw_circle_lines(
+            cx,
+            cy,
+            radius,
+            if active || hovered { 2.0 } else { 1.2 },
+            if active {
+                CYAN
+            } else if hovered {
+                ACCENT
+            } else {
+                Color::from_rgba(90, 110, 130, 160)
+            },
+        );
+
+        let accent = if active || hovered { CYAN } else { TEXT };
+        match *tool {
+            CornerTool::Build => {
+                if let Some(tex) = app.icons.hammer.as_ref() {
+                    let size = s(22.0);
+                    draw_texture_ex(
+                        tex,
+                        cx - size * 0.5,
+                        cy - size * 0.5,
+                        WHITE,
+                        DrawTextureParams {
+                            dest_size: Some(vec2(size, size)),
+                            ..Default::default()
+                        },
+                    );
+                } else {
+                    draw_circle(cx, cy, s(4.0), accent);
+                }
+            }
+            CornerTool::TechTree => draw_tech_icon(cx, cy, accent),
+            CornerTool::Map => draw_map_icon(cx, cy, accent),
+            CornerTool::NodeChart => draw_nodes_icon(cx, cy, accent),
+        }
+
+        // Hover / active label floats to the left — keeps chrome quiet.
+        if hovered || active {
+            let label = tool.label();
+            let fs = s(14.0);
+            let tw = measure_text(label, None, fs as u16, 1.0).width;
+            let lx = r.x - s(14.0) - tw;
+            let ly = cy + fs * 0.35;
+            draw_rectangle(
+                lx - s(8.0),
+                cy - s(12.0),
+                tw + s(16.0),
+                s(24.0),
+                Color::from_rgba(12, 14, 18, 200),
+            );
+            draw_text(label, lx, ly, fs, if active { CYAN } else { TEXT });
+        }
+    }
+}
+
+fn draw_corner_overlay(tool: CornerTool, _mouse: (f32, f32)) {
+    draw_rectangle(
+        0.0,
+        0.0,
+        screen_width(),
+        screen_height(),
+        Color::from_rgba(0, 0, 0, 120),
+    );
+    let w = 520.0;
+    let h = 360.0;
+    let x = (screen_width() - w) * 0.5;
+    let y = (screen_height() - h) * 0.5 - 40.0;
+    draw_rectangle(x, y, w, h, PANEL);
+    draw_rectangle_lines(x, y, w, h, 1.5, NODE_BORDER);
+
+    let title = match tool {
+        CornerTool::TechTree => "Tech Tree",
+        CornerTool::Map => "Map",
+        CornerTool::NodeChart => "Node Chart",
+        CornerTool::Build => "Build",
+    };
+    draw_text(title, x + 24.0, y + 40.0, 30.0, TEXT);
+    draw_text(
+        "Coming soon — placeholder panel",
+        x + 24.0,
+        y + 72.0,
+        18.0,
+        TEXT_DIM,
+    );
+
+    match tool {
+        CornerTool::TechTree => {
+            draw_tech_icon(x + w * 0.5, y + h * 0.55, CYAN);
+            draw_text(
+                "Unlock machines and logistics upgrades here.",
+                x + 24.0,
+                y + h - 36.0,
+                16.0,
+                TEXT_DIM,
+            );
+        }
+        CornerTool::Map => {
+            draw_map_icon(x + w * 0.5, y + h * 0.55, CYAN);
+            draw_text(
+                "World overview and remote navigation.",
+                x + 24.0,
+                y + h - 36.0,
+                16.0,
+                TEXT_DIM,
+            );
+        }
+        CornerTool::NodeChart => {
+            draw_nodes_icon(x + w * 0.5, y + h * 0.55, CYAN);
+            draw_text(
+                "Factory graph — belts, power, and throughput.",
+                x + 24.0,
+                y + h - 36.0,
+                16.0,
+                TEXT_DIM,
+            );
+        }
+        CornerTool::Build => {}
+    }
+
+    // Click outside closes via handle_hud_input.
+}
+
+fn draw_drag_ghost(ui: &Ui, mouse: (f32, f32)) {
+    let kind = if let Some(kind) = ui.palette_drag {
+        let dx = mouse.0 - ui.palette_drag_origin.0;
+        let dy = mouse.1 - ui.palette_drag_origin.1;
+        if dx * dx + dy * dy > 36.0 {
+            Some(kind)
+        } else {
+            None
+        }
+    } else if let Some(i) = ui.hotbar_drag_from {
+        let dx = mouse.0 - ui.hotbar_drag_origin.0;
+        let dy = mouse.1 - ui.hotbar_drag_origin.1;
+        if dx * dx + dy * dy > 36.0 {
+            ui.hotbar[i]
+        } else {
+            None
+        }
+    } else {
+        None
+    };
+    let Some(kind) = kind else {
+        return;
+    };
+    let size = 48.0;
+    let x = mouse.0 - size * 0.5;
+    let y = mouse.1 - size * 0.5;
+    draw_rectangle(x, y, size, size, Color::from_rgba(20, 24, 30, 220));
+    draw_rectangle_lines(x, y, size, size, 2.0, CYAN);
+    draw_rectangle(x + 10.0, y + 10.0, size - 20.0, 12.0, kind_swatch(kind));
+    draw_text(kind.short(), x + 6.0, y + 38.0, 14.0, TEXT);
+}
+
+fn draw_context_menu(ui: &Ui, mouse: (f32, f32)) {
+    let Some(menu) = ui.context_menu.as_ref() else {
+        return;
+    };
+    let r = context_menu_rect(menu);
+    let items = context_items(menu.target);
+    draw_rectangle(r.x, r.y, r.w, r.h, Color::from_rgba(18, 20, 26, 250));
+    draw_rectangle_lines(r.x, r.y, r.w, r.h, 1.4, NODE_BORDER);
+    for (i, (label, _)) in items.iter().enumerate() {
+        let y = r.y + 6.0 + i as f32 * 34.0;
+        let hovered = mouse.0 >= r.x
+            && mouse.0 <= r.x + r.w
+            && mouse.1 >= y
+            && mouse.1 <= y + 30.0;
+        if hovered {
+            draw_rectangle(
+                r.x + 4.0,
+                y,
+                r.w - 8.0,
+                30.0,
+                Color::from_rgba(48, 58, 72, 255),
+            );
+        }
+        draw_text(label, r.x + 14.0, y + 21.0, 18.0, if hovered { CYAN } else { TEXT });
     }
 }
 
@@ -1571,7 +2340,7 @@ fn draw_and_handle_build_menu(app: &mut App, mouse: (f32, f32)) {
     draw_rectangle_lines(r.x, r.y, r.w, r.h, 1.5, NODE_BORDER);
     draw_text("Build", r.x + 20.0, r.y + 32.0, 28.0, TEXT);
     draw_text(
-        "Place buildings from the hotbar. Power: click energy ports. R rotates.",
+        "Drag onto the hotbar · click to equip · 1–9 pins to a slot",
         r.x + 20.0,
         r.y + 54.0,
         15.0,
@@ -1609,7 +2378,7 @@ fn draw_and_handle_build_menu(app: &mut App, mouse: (f32, f32)) {
             if active { CYAN } else { NODE_BORDER },
         );
         draw_text(cat.label(), x + 8.0, tab_y + 21.0, 15.0, TEXT);
-        if hovered && is_mouse_button_pressed(MouseButton::Left) {
+        if hovered && is_mouse_button_pressed(MouseButton::Left) && app.ui.palette_drag.is_none() {
             app.ui.build_category = *cat;
         }
     }
@@ -1629,7 +2398,7 @@ fn draw_and_handle_build_menu(app: &mut App, mouse: (f32, f32)) {
             && mouse.0 <= row.x + row.w
             && mouse.1 >= row.y
             && mouse.1 <= row.y + row.h;
-        let selected = app.ui.selected == Some(*kind);
+        let selected = app.ui.selected == Some(*kind) || app.ui.palette_drag == Some(*kind);
         draw_rectangle(
             row.x,
             row.y,
@@ -1649,11 +2418,27 @@ fn draw_and_handle_build_menu(app: &mut App, mouse: (f32, f32)) {
             1.2,
             if selected { CYAN } else { NODE_BORDER },
         );
-        draw_text(kind.label(), row.x + 16.0, row.y + 32.0, 20.0, TEXT);
-        if hovered && is_mouse_button_pressed(MouseButton::Left) {
-            app.ui.selected = Some(*kind);
-            app.ui.hotbar[app.ui.hotbar_index] = Some(*kind);
-            app.ui.build_open = false;
+        draw_rectangle(row.x + 14.0, row.y + 16.0, 28.0, 20.0, kind_swatch(*kind));
+        draw_text(kind.label(), row.x + 54.0, row.y + 32.0, 20.0, TEXT);
+        if hovered
+            && is_mouse_button_pressed(MouseButton::Left)
+            && app.ui.palette_drag.is_none()
+        {
+            app.ui.palette_drag = Some(*kind);
+            app.ui.palette_drag_origin = mouse;
+            app.ui.context_menu = None;
         }
+    }
+
+    // Click dimmer outside panel closes menu (unless dragging).
+    if app.ui.palette_drag.is_none()
+        && is_mouse_button_pressed(MouseButton::Left)
+        && !(mouse.0 >= r.x
+            && mouse.0 <= r.x + r.w
+            && mouse.1 >= r.y
+            && mouse.1 <= r.y + r.h)
+        && !point_in_hud_chrome(mouse.0, mouse.1)
+    {
+        app.ui.build_open = false;
     }
 }

@@ -2,6 +2,28 @@
 
 Native factory builder (Linux / Windows / macOS): placeable dual-lane conveyors, power poles, **online multiplayer** (code join — works UK ↔ USA).
 
+## Downloads
+
+GitHub Actions builds **Linux, Windows, and macOS** (Intel + Apple Silicon) on every `main` push and publishes them on version tags.
+
+- Latest release: https://github.com/VRHighLow/FactoryPlanner/releases/latest
+- Prefer the `.zip` (includes `assets/` for icons). Run from inside the unzipped folder.
+
+| Platform | Artifact |
+|----------|----------|
+| Linux x86_64 | `factory_planner-linux-x86_64.zip` |
+| Windows x86_64 | `factory_planner-windows-x86_64.exe.zip` |
+| macOS Apple Silicon | `factory_planner-macos-aarch64.zip` |
+| macOS Intel | `factory_planner-macos-x86_64.zip` |
+
+```powershell
+# Windows example
+Invoke-WebRequest -Uri "https://github.com/VRHighLow/FactoryPlanner/releases/latest/download/factory_planner-windows-x86_64.exe.zip" -OutFile fp.zip
+Expand-Archive fp.zip -DestinationPath factory_planner
+cd factory_planner
+.\factory_planner-windows-x86_64.exe
+```
+
 ## Run (dev)
 
 ```bash
@@ -15,6 +37,7 @@ cargo run --release
 - **Belts**: click an item port, then another (same as power wires). Longer wires = longer travel time. Use a **Splitter** to branch.
 - **Power**: wire Solar → Power Pole (orange). Machines need a live pole field.
 - Dual lanes on each belt wire.
+- **HUD**: floating hotbar (1–9), bottom-right tools (Build / Tech / Map / Nodes). **B** opens Build.
 
 ## Multiplayer (online, worldwide)
 
@@ -31,12 +54,3 @@ Optional MQTT override (ticket rendezvous only):
 ```bash
 FACTORY_MQTT_HOST=broker.emqx.io FACTORY_MQTT_PORT=1883 cargo run --release
 ```
-
-## Windows download (after GitHub release)
-
-```powershell
-Invoke-WebRequest -Uri "https://github.com/VRHighLow/FactoryPlanner/releases/latest/download/factory_planner-windows-x86_64.exe" -OutFile factory_planner.exe
-.\factory_planner.exe
-```
-
-Or from Releases page: download `factory_planner-windows-x86_64.exe` and double-click.

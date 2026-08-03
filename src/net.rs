@@ -32,7 +32,7 @@ pub enum NetEvent {
     HostReady { code: String, addr: String },
     Joined { player_id: u8 },
     JoinFailed { reason: String },
-    PeerHello { id: u8 },
+    PeerHello,
     PlaceRequest {
         kind: BuildingKind,
         x: f32,
@@ -130,7 +130,6 @@ pub struct NetHandle {
     pub tx: Sender<NetCommand>,
     pub is_host: bool,
     pub code: String,
-    pub join_addr: String,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -595,7 +594,7 @@ fn parse_peer(raw: &str, local_id: u8, is_host: bool, ev: &Sender<NetEvent>) {
         Some("HELLO") if p.len() >= 3 => {
             let id = p[2].parse().unwrap_or(255);
             if id != local_id {
-                let _ = ev.send(NetEvent::PeerHello { id });
+                let _ = ev.send(NetEvent::PeerHello);
                 let _ = ev.send(NetEvent::Info(format!("Player {id} connected")));
             }
         }
@@ -1053,7 +1052,6 @@ pub fn start_host() -> NetHandle {
         tx: cmd_tx,
         is_host: true,
         code: code_ret,
-        join_addr: "iroh P2P".into(),
     }
 }
 
@@ -1124,6 +1122,5 @@ pub fn start_client(_ignored: &str, code_or_ticket: &str) -> NetHandle {
         tx: cmd_tx,
         is_host: false,
         code: code_display,
-        join_addr: "iroh P2P".into(),
     }
 }
