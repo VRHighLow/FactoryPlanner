@@ -14,8 +14,7 @@ const GRID_MAJOR_EVERY: i32 = 10;
 const PORT_HIT: f32 = 14.0;
 const HOTBAR_SLOTS: usize = 9;
 const BELT_HALF_WIDTH: f32 = 7.0;
-const CURSOR_PLAYBACK_DELAY_MS: f32 = 50.0;
-const CURSOR_IDLE_SEND_MS: u128 = 80;
+const TARGET_FPS: f64 = 120.0;
 
 const BG: Color = Color::from_rgba(22, 26, 32, 255);
 const GRID_MINOR_C: Color = Color::from_rgba(48, 56, 68, 90);
@@ -174,6 +173,10 @@ impl App {
             self.world.clear();
         }
         self.peers.clear();
+        // Ask host for a fresh world snapshot (and tell peers we're in-world).
+        if let Some(net) = self.net.as_ref() {
+            let _ = net.tx.send(NetCommand::Announce);
+        }
     }
 
     fn stop_net(&mut self) {
@@ -193,6 +196,11 @@ fn window_conf() -> Conf {
         window_width: 1400,
         window_height: 900,
         high_dpi: true,
+        platform: miniquad::conf::Platform {
+            // Uncap vsync so we can run above 60Hz; we pace to TARGET_FPS ourselves.
+            swap_interval: Some(0),
+            ..Default::default()
+        },
         ..Default::default()
     }
 }
@@ -200,8 +208,10 @@ fn window_conf() -> Conf {
 #[macroquad::main(window_conf)]
 async fn main() {
     let mut app = App::new();
+    let frame_budget = std::time::Duration::from_secs_f64(1.0 / TARGET_FPS);
 
     loop {
+        let frame_start = Instant::now();
         let dt = get_frame_time().clamp(0.0, 0.05);
         let mouse = mouse_position();
 
@@ -225,6 +235,10 @@ async fn main() {
         }
 
         next_frame().await;
+        let spent = frame_start.elapsed();
+        if spent < frame_budget {
+            std::thread::sleep(frame_budget - spent);
+        }
     }
 }
 
@@ -530,41 +544,15 @@ fn send_world_snapshot(app: &App) {
 
 fn playback_peer_cursors(app: &mut App) {
     for peer in app.peers.values_mut() {
-        if peer.samples.is_empty() {
-            continue;
-        }
-        // Keep a short backlog so we can replay the sender's exact path.
-        while peer.samples.len() > 240 {
+        // Zero buffer: always show the newest sample immediately.
+        while peer.samples.len() > 1 {
             peer.samples.pop_front();
         }
-        let latest_t = peer.samples.back().map(|s| s.t_ms).unwrap_or(0.0);
-        let target_t = latest_t - CURSOR_PLAYBACK_DELAY_MS;
-
-        while peer.samples.len() >= 2 && peer.samples[1].t_ms <= target_t {
-            peer.samples.pop_front();
-        }
-
-        if peer.samples.len() == 1 {
-            let s = &peer.samples[0];
+        if let Some(s) = peer.samples.back() {
             peer.x = s.x;
             peer.y = s.y;
             peer.selected = s.selected;
             peer.facing = s.facing;
-            continue;
-        }
-
-        let a = &peer.samples[0];
-        let b = &peer.samples[1];
-        let span = (b.t_ms - a.t_ms).max(0.001);
-        let u = ((target_t - a.t_ms) / span).clamp(0.0, 1.0);
-        peer.x = a.x + (b.x - a.x) * u;
-        peer.y = a.y + (b.y - a.y) * u;
-        if u >= 0.5 {
-            peer.selected = b.selected;
-            peer.facing = b.facing;
-        } else {
-            peer.selected = a.selected;
-            peer.facing = a.facing;
         }
     }
 }
@@ -604,8 +592,11 @@ fn drain_net(app: &mut App) {
                 app.net = None;
             }
             NetEvent::PeerHello { .. } => {
+                // Anyone who hears a HELLO while hosting dumps their world so the
+                // joiner catches up (buildings + wires).
                 if app.net.as_ref().map(|n| n.is_host).unwrap_or(false) {
                     send_world_snapshot(app);
+                    app.join_status = "Synced world to joiner".into();
                 }
             }
             NetEvent::PeerCursor {
@@ -660,6 +651,7 @@ fn drain_net(app: &mut App) {
                 facing,
             } => {
                 let _ = app.world.place_node_with_id(id, kind, x, y, facing);
+                app.join_status = format!("Peer placed {}", kind.short());
             }
             NetEvent::PeerRemove { id } => {
                 app.world.remove_node(id);
@@ -701,14 +693,7 @@ fn send_cursor_if_due(app: &mut App, wx: f32, wy: f32) {
     let Some(net) = app.net.as_ref() else {
         return;
     };
-    let moved = !app.last_cursor_x.is_finite()
-        || (wx - app.last_cursor_x).abs() > 0.01
-        || (wy - app.last_cursor_y).abs() > 0.01;
-    // Stream every frame while moving so peers replay the exact path.
-    // When idle, send occasional keepalives.
-    if !moved && app.last_cursor_send.elapsed().as_millis() < CURSOR_IDLE_SEND_MS {
-        return;
-    }
+    // Every frame at 120Hz while in multiplayer — zero smoothing delay on receive.
     app.last_cursor_send = Instant::now();
     app.last_cursor_x = wx;
     app.last_cursor_y = wy;
@@ -870,6 +855,7 @@ fn place_building(app: &mut App, kind: BuildingKind, x: f32, y: f32, facing: Fac
                 y,
                 facing,
             });
+            app.join_status = format!("Placed #{id}");
         }
     }
 }
@@ -1007,6 +993,9 @@ fn draw_game(app: &mut App, mouse: (f32, f32), wx: f32, wy: f32) {
                 18.0,
                 TEXT_DIM,
             );
+        }
+        if !app.join_status.is_empty() {
+            draw_text(&app.join_status, 16.0, 50.0, 16.0, ACCENT);
         }
     }
     if app.ui.build_open {

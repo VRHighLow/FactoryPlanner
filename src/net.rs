@@ -1,8 +1,11 @@
 //! Online multiplayer via public MQTT broker (UK↔USA, code only).
 //! Both peers dial out — no port forwarding / LAN required.
+//!
+//! World ops (place/remove/link) are prioritized over cursors so 120 FPS
+//! cursor streaming cannot starve building sync.
 
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::mpsc::{self, Receiver, Sender};
+use std::sync::mpsc::{self, Receiver, Sender, TryRecvError};
 use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
@@ -52,6 +55,8 @@ pub enum NetEvent {
 #[derive(Clone, Debug)]
 pub enum NetCommand {
     Stop,
+    /// Re-broadcast HELLO so the host can send a fresh world snapshot.
+    Announce,
     SetCursor {
         x: f32,
         y: f32,
@@ -113,8 +118,12 @@ fn gen_code() -> String {
     format!("{:06}", (t % 1_000_000) as u32)
 }
 
-fn topic(code: &str) -> String {
-    format!("factoryplanner/v2/{code}")
+fn topic_world(code: &str) -> String {
+    format!("factoryplanner/v3/{code}/w")
+}
+
+fn topic_cursor(code: &str) -> String {
+    format!("factoryplanner/v3/{code}/c")
 }
 
 fn kind_opt(k: Option<BuildingKind>) -> String {
@@ -142,21 +151,16 @@ fn parse_peer(raw: &str, local_id: u8, ev: &Sender<NetEvent>) {
             if id == local_id {
                 return;
             }
-            let t_ms = if p.len() >= 7 {
-                p[6].parse().unwrap_or(0.0)
-            } else {
-                0.0
-            };
             let _ = ev.send(NetEvent::PeerCursor {
                 id,
                 x: p[2].parse().unwrap_or(0.0),
                 y: p[3].parse().unwrap_or(0.0),
                 selected: parse_kind(p[4]),
                 facing: Facing::from_u8(p[5].parse().unwrap_or(0)),
-                t_ms,
+                t_ms: p[6].parse().unwrap_or(0.0),
             });
         }
-        Some("PLACE") if p.len() >= 8 => {
+        Some("PLACE") if p.len() >= 7 => {
             let owner: u8 = p[1].parse().unwrap_or(255);
             if owner == local_id {
                 return;
@@ -233,11 +237,88 @@ fn parse_peer(raw: &str, local_id: u8, ev: &Sender<NetEvent>) {
     }
 }
 
-fn qos_for(cmd: &NetCommand) -> QoS {
-    match cmd {
-        NetCommand::SetCursor { .. } => QoS::AtMostOnce,
-        _ => QoS::AtLeastOnce,
-    }
+fn encode_cmd(local_id: u8, cmd: &NetCommand) -> Option<(bool, String)> {
+    // (is_cursor, payload)
+    Some(match cmd {
+        NetCommand::Stop | NetCommand::Announce => return None,
+        NetCommand::SetCursor {
+            x,
+            y,
+            selected,
+            facing,
+            t_ms,
+        } => (
+            true,
+            encode(&[
+                "CUR",
+                &local_id.to_string(),
+                &format!("{x:.2}"),
+                &format!("{y:.2}"),
+                &kind_opt(*selected),
+                &facing.as_u8().to_string(),
+                &format!("{t_ms:.2}"),
+            ]),
+        ),
+        NetCommand::Place {
+            id,
+            kind,
+            x,
+            y,
+            facing,
+        } => (
+            false,
+            encode(&[
+                "PLACE",
+                &local_id.to_string(),
+                &id.to_string(),
+                &kind.as_u8().to_string(),
+                &format!("{x:.3}"),
+                &format!("{y:.3}"),
+                &facing.as_u8().to_string(),
+            ]),
+        ),
+        NetCommand::Remove { id } => (
+            false,
+            encode(&["REM", &local_id.to_string(), &id.to_string()]),
+        ),
+        NetCommand::Move { id, x, y } => (
+            false,
+            encode(&[
+                "MOVE",
+                &local_id.to_string(),
+                &id.to_string(),
+                &format!("{x:.3}"),
+                &format!("{y:.3}"),
+            ]),
+        ),
+        NetCommand::Rotate { id, facing } => (
+            false,
+            encode(&[
+                "ROT",
+                &local_id.to_string(),
+                &id.to_string(),
+                &facing.as_u8().to_string(),
+            ]),
+        ),
+        NetCommand::Link {
+            power,
+            from_node,
+            from_port,
+            to_node,
+            to_port,
+        } => (
+            false,
+            encode(&[
+                "LINK",
+                &local_id.to_string(),
+                if *power { "P" } else { "B" },
+                &from_node.to_string(),
+                &from_port.to_string(),
+                &to_node.to_string(),
+                &to_port.to_string(),
+            ]),
+        ),
+    })
 }
 
 fn run_mqtt(
@@ -261,11 +342,19 @@ fn run_mqtt(
     opts.set_keep_alive(Duration::from_secs(20));
     opts.set_clean_session(true);
 
-    let (client, mut connection) = Client::new(opts, 256);
-    let t = topic(&code);
-    if let Err(e) = client.subscribe(&t, QoS::AtLeastOnce) {
+    // Large request buffer so brief bursts never drop world ops.
+    let (client, mut connection) = Client::new(opts, 4096);
+    let tw = topic_world(&code);
+    let tc = topic_cursor(&code);
+    if let Err(e) = client.subscribe(&tw, QoS::AtLeastOnce) {
         let _ = ev_tx.send(NetEvent::JoinFailed {
             reason: format!("subscribe failed: {e}"),
+        });
+        return;
+    }
+    if let Err(e) = client.subscribe(&tc, QoS::AtMostOnce) {
+        let _ = ev_tx.send(NetEvent::JoinFailed {
+            reason: format!("subscribe cursor failed: {e}"),
         });
         return;
     }
@@ -291,90 +380,92 @@ fn run_mqtt(
         if is_host { "HOST" } else { "CLIENT" },
         &local_id.to_string(),
     ]);
-    let _ = client.publish(&t, QoS::AtLeastOnce, false, hello.as_bytes());
+    let _ = client.publish(&tw, QoS::AtLeastOnce, false, hello.as_bytes());
 
     let stop = Arc::new(AtomicBool::new(false));
     let stop2 = stop.clone();
-    let topic_pub = t.clone();
+    let tw_pub = tw.clone();
+    let tc_pub = tc.clone();
+    let ev_pub = ev_tx.clone();
     thread::spawn(move || {
-        while let Ok(cmd) = cmd_rx.recv() {
-            let qos = qos_for(&cmd);
-            let msg = match &cmd {
-                NetCommand::Stop => {
-                    let bye = encode(&["BYE", &local_id.to_string()]);
-                    let _ = client.publish(&topic_pub, QoS::AtLeastOnce, false, bye.as_bytes());
-                    stop2.store(true, Ordering::SeqCst);
-                    break;
-                }
-                NetCommand::SetCursor {
-                    x,
-                    y,
-                    selected,
-                    facing,
-                    t_ms,
-                } => encode(&[
-                    "CUR",
-                    &local_id.to_string(),
-                    &format!("{x:.2}"),
-                    &format!("{y:.2}"),
-                    &kind_opt(*selected),
-                    &facing.as_u8().to_string(),
-                    &format!("{t_ms:.2}"),
-                ]),
-                NetCommand::Place {
-                    id,
-                    kind,
-                    x,
-                    y,
-                    facing,
-                } => encode(&[
-                    "PLACE",
-                    &local_id.to_string(),
-                    &id.to_string(),
-                    &kind.as_u8().to_string(),
-                    &format!("{x:.3}"),
-                    &format!("{y:.3}"),
-                    &facing.as_u8().to_string(),
-                    "1",
-                ]),
-                NetCommand::Remove { id } => {
-                    encode(&["REM", &local_id.to_string(), &id.to_string()])
-                }
-                NetCommand::Move { id, x, y } => encode(&[
-                    "MOVE",
-                    &local_id.to_string(),
-                    &id.to_string(),
-                    &format!("{x:.3}"),
-                    &format!("{y:.3}"),
-                ]),
-                NetCommand::Rotate { id, facing } => encode(&[
-                    "ROT",
-                    &local_id.to_string(),
-                    &id.to_string(),
-                    &facing.as_u8().to_string(),
-                ]),
-                NetCommand::Link {
-                    power,
-                    from_node,
-                    from_port,
-                    to_node,
-                    to_port,
-                } => encode(&[
-                    "LINK",
-                    &local_id.to_string(),
-                    if *power { "P" } else { "B" },
-                    &from_node.to_string(),
-                    &from_port.to_string(),
-                    &to_node.to_string(),
-                    &to_port.to_string(),
-                ]),
+        loop {
+            let first = match cmd_rx.recv() {
+                Ok(c) => c,
+                Err(_) => break,
             };
-            if client
-                .publish(&topic_pub, qos, false, msg.as_bytes())
-                .is_err()
-            {
-                stop2.store(true, Ordering::SeqCst);
-                break;
+
+            // Drain the rest of the queue (non-blocking) so we can prioritize.
+            let mut batch = vec![first];
+            loop {
+                match cmd_rx.try_recv() {
+                    Ok(c) => batch.push(c),
+                    Err(TryRecvError::Empty) => break,
+                    Err(TryRecvError::Disconnected) => {
+                        stop2.store(true, Ordering::SeqCst);
+                        return;
+                    }
+                }
+            }
+
+            let mut latest_cursor: Option<NetCommand> = None;
+            let mut world_ops: Vec<NetCommand> = Vec::new();
+            let mut announce = false;
+            for cmd in batch {
+                match cmd {
+                    NetCommand::Stop => {
+                        let bye = encode(&["BYE", &local_id.to_string()]);
+                        let _ = client.publish(&tw_pub, QoS::AtLeastOnce, false, bye.as_bytes());
+                        stop2.store(true, Ordering::SeqCst);
+                        return;
+                    }
+                    NetCommand::Announce => announce = true,
+                    NetCommand::SetCursor { .. } => latest_cursor = Some(cmd),
+                    other => world_ops.push(other),
+                }
+            }
+
+            if announce {
+                let hello = encode(&[
+                    "HELLO",
+                    if is_host { "HOST" } else { "CLIENT" },
+                    &local_id.to_string(),
+                ]);
+                for _ in 0..3 {
+                    if client
+                        .publish(&tw_pub, QoS::AtLeastOnce, false, hello.as_bytes())
+                        .is_ok()
+                    {
+                        break;
+                    }
+                    thread::sleep(Duration::from_millis(5));
+                }
+            }
+
+            for cmd in world_ops {
+                if let Some((_, msg)) = encode_cmd(local_id, &cmd) {
+                    let mut ok = false;
+                    for _ in 0..5 {
+                        if client
+                            .publish(&tw_pub, QoS::AtLeastOnce, false, msg.as_bytes())
+                            .is_ok()
+                        {
+                            ok = true;
+                            break;
+                        }
+                        thread::sleep(Duration::from_millis(2));
+                    }
+                    if !ok {
+                        let _ = ev_pub.send(NetEvent::Info(
+                            "Warning: failed to sync a building action".into(),
+                        ));
+                    }
+                }
+            }
+
+            if let Some(cmd) = latest_cursor {
+                if let Some((_, msg)) = encode_cmd(local_id, &cmd) {
+                    let _ = client.publish(&tc_pub, QoS::AtMostOnce, false, msg.as_bytes());
+                }
             }
         }
     });
