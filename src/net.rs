@@ -26,6 +26,7 @@ pub enum NetEvent {
         y: f32,
         selected: Option<BuildingKind>,
         facing: Facing,
+        t_ms: f32,
     },
     PeerPlace {
         id: u32,
@@ -56,6 +57,7 @@ pub enum NetCommand {
         y: f32,
         selected: Option<BuildingKind>,
         facing: Facing,
+        t_ms: f32,
     },
     Place {
         id: u32,
@@ -140,12 +142,18 @@ fn parse_peer(raw: &str, local_id: u8, ev: &Sender<NetEvent>) {
             if id == local_id {
                 return;
             }
+            let t_ms = if p.len() >= 7 {
+                p[6].parse().unwrap_or(0.0)
+            } else {
+                0.0
+            };
             let _ = ev.send(NetEvent::PeerCursor {
                 id,
                 x: p[2].parse().unwrap_or(0.0),
                 y: p[3].parse().unwrap_or(0.0),
                 selected: parse_kind(p[4]),
                 facing: Facing::from_u8(p[5].parse().unwrap_or(0)),
+                t_ms,
             });
         }
         Some("PLACE") if p.len() >= 8 => {
@@ -303,14 +311,15 @@ fn run_mqtt(
                     y,
                     selected,
                     facing,
+                    t_ms,
                 } => encode(&[
                     "CUR",
                     &local_id.to_string(),
-                    &format!("{x:.1}"),
-                    &format!("{y:.1}"),
+                    &format!("{x:.2}"),
+                    &format!("{y:.2}"),
                     &kind_opt(*selected),
                     &facing.as_u8().to_string(),
-                    "1",
+                    &format!("{t_ms:.2}"),
                 ]),
                 NetCommand::Place {
                     id,

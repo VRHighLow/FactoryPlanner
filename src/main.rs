@@ -4,7 +4,7 @@ mod net;
 use macroquad::prelude::*;
 use net::{NetCommand, NetEvent, NetHandle};
 use sim::*;
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::time::Instant;
 
 const MIN_ZOOM: f32 = 0.35;
@@ -14,7 +14,8 @@ const GRID_MAJOR_EVERY: i32 = 10;
 const PORT_HIT: f32 = 14.0;
 const HOTBAR_SLOTS: usize = 9;
 const BELT_HALF_WIDTH: f32 = 7.0;
-const CURSOR_SEND_MS: u128 = 16;
+const CURSOR_PLAYBACK_DELAY_MS: f32 = 50.0;
+const CURSOR_IDLE_SEND_MS: u128 = 80;
 
 const BG: Color = Color::from_rgba(22, 26, 32, 255);
 const GRID_MINOR_C: Color = Color::from_rgba(48, 56, 68, 90);
@@ -45,14 +46,21 @@ enum Screen {
     Game,
 }
 
+struct CursorSample {
+    x: f32,
+    y: f32,
+    t_ms: f32,
+    selected: Option<BuildingKind>,
+    facing: Facing,
+}
+
 struct PeerPresence {
     id: u8,
     x: f32,
     y: f32,
-    target_x: f32,
-    target_y: f32,
     selected: Option<BuildingKind>,
     facing: Facing,
+    samples: VecDeque<CursorSample>,
 }
 
 struct Cam {
@@ -122,6 +130,9 @@ struct App {
     join_focus: bool,
     join_status: String,
     last_cursor_send: Instant,
+    last_cursor_x: f32,
+    last_cursor_y: f32,
+    cursor_clock: Instant,
     local_player_id: u8,
 }
 
@@ -144,6 +155,9 @@ impl App {
             join_focus: false,
             join_status: String::new(),
             last_cursor_send: Instant::now(),
+            last_cursor_x: f32::NAN,
+            last_cursor_y: f32::NAN,
+            cursor_clock: Instant::now(),
             local_player_id: 0,
         }
     }
@@ -204,7 +218,7 @@ async fn main() {
                 handle_pan_zoom(&mut app, mouse);
                 handle_world_input(&mut app, mouse, wx, wy);
                 send_cursor_if_due(&mut app, wx, wy);
-                lerp_peer_cursors(&mut app, dt);
+                playback_peer_cursors(&mut app);
                 app.world.tick(dt);
                 draw_game(&mut app, mouse, wx, wy);
             }
@@ -514,11 +528,44 @@ fn send_world_snapshot(app: &App) {
     }
 }
 
-fn lerp_peer_cursors(app: &mut App, dt: f32) {
-    let t = (dt * 18.0).clamp(0.0, 1.0);
+fn playback_peer_cursors(app: &mut App) {
     for peer in app.peers.values_mut() {
-        peer.x += (peer.target_x - peer.x) * t;
-        peer.y += (peer.target_y - peer.y) * t;
+        if peer.samples.is_empty() {
+            continue;
+        }
+        // Keep a short backlog so we can replay the sender's exact path.
+        while peer.samples.len() > 240 {
+            peer.samples.pop_front();
+        }
+        let latest_t = peer.samples.back().map(|s| s.t_ms).unwrap_or(0.0);
+        let target_t = latest_t - CURSOR_PLAYBACK_DELAY_MS;
+
+        while peer.samples.len() >= 2 && peer.samples[1].t_ms <= target_t {
+            peer.samples.pop_front();
+        }
+
+        if peer.samples.len() == 1 {
+            let s = &peer.samples[0];
+            peer.x = s.x;
+            peer.y = s.y;
+            peer.selected = s.selected;
+            peer.facing = s.facing;
+            continue;
+        }
+
+        let a = &peer.samples[0];
+        let b = &peer.samples[1];
+        let span = (b.t_ms - a.t_ms).max(0.001);
+        let u = ((target_t - a.t_ms) / span).clamp(0.0, 1.0);
+        peer.x = a.x + (b.x - a.x) * u;
+        peer.y = a.y + (b.y - a.y) * u;
+        if u >= 0.5 {
+            peer.selected = b.selected;
+            peer.facing = b.facing;
+        } else {
+            peer.selected = a.selected;
+            peer.facing = a.facing;
+        }
     }
 }
 
@@ -567,24 +614,39 @@ fn drain_net(app: &mut App) {
                 y,
                 selected,
                 facing,
+                t_ms,
             } => {
                 if id != app.local_player_id {
+                    let sample = CursorSample {
+                        x,
+                        y,
+                        t_ms,
+                        selected,
+                        facing,
+                    };
                     if let Some(peer) = app.peers.get_mut(&id) {
-                        peer.target_x = x;
-                        peer.target_y = y;
-                        peer.selected = selected;
-                        peer.facing = facing;
+                        // Ignore out-of-order / duplicate timestamps.
+                        if peer
+                            .samples
+                            .back()
+                            .map(|s| t_ms + 0.01 < s.t_ms)
+                            .unwrap_or(false)
+                        {
+                            continue;
+                        }
+                        peer.samples.push_back(sample);
                     } else {
+                        let mut samples = VecDeque::new();
+                        samples.push_back(sample);
                         app.peers.insert(
                             id,
                             PeerPresence {
                                 id,
                                 x,
                                 y,
-                                target_x: x,
-                                target_y: y,
                                 selected,
                                 facing,
+                                samples,
                             },
                         );
                     }
@@ -639,15 +701,24 @@ fn send_cursor_if_due(app: &mut App, wx: f32, wy: f32) {
     let Some(net) = app.net.as_ref() else {
         return;
     };
-    if app.last_cursor_send.elapsed().as_millis() < CURSOR_SEND_MS {
+    let moved = !app.last_cursor_x.is_finite()
+        || (wx - app.last_cursor_x).abs() > 0.01
+        || (wy - app.last_cursor_y).abs() > 0.01;
+    // Stream every frame while moving so peers replay the exact path.
+    // When idle, send occasional keepalives.
+    if !moved && app.last_cursor_send.elapsed().as_millis() < CURSOR_IDLE_SEND_MS {
         return;
     }
     app.last_cursor_send = Instant::now();
+    app.last_cursor_x = wx;
+    app.last_cursor_y = wy;
+    let t_ms = app.cursor_clock.elapsed().as_secs_f32() * 1000.0;
     let _ = net.tx.send(NetCommand::SetCursor {
         x: wx,
         y: wy,
         selected: app.ui.selected,
         facing: app.ui.place_facing,
+        t_ms,
     });
 }
 
