@@ -4,7 +4,7 @@ resolver = "2"
 
 [package]
 name = "factory_planner"
-version = "0.2.6"
+version = "0.2.7"
 edition = "2021"
 description = "Factory planner — dual-lane conveyors, power poles, online multiplayer."
 license = "MIT"
@@ -13,6 +13,15 @@ repository = "https://github.com/VRHighLow/FactoryPlanner"
 [dependencies]
 macroquad = "0.4"
 rumqttc = "0.24"
+iroh = "1.0.3"
+iroh-gossip = "0.101.0"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time"] }
+bytes = "1"
+postcard = { version = "1", features = ["alloc"] }
+data-encoding = "2"
+serde = { version = "1", features = ["derive"] }
+n0-future = "0.3"
+rand = "0.10"
 
 [profile.release]
 lto = true

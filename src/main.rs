@@ -355,7 +355,7 @@ fn screen_play(app: &mut App, mouse: (f32, f32)) {
 fn screen_multiplayer(app: &mut App, mouse: (f32, f32)) {
     draw_menu_backdrop(
         "Multiplayer",
-        "Online relay — play across the world with a code",
+        "P2P (iroh) — play across the world with a code",
     );
     let bx = 80.0;
     let mut by = 220.0;
@@ -387,7 +387,7 @@ fn screen_multiplayer(app: &mut App, mouse: (f32, f32)) {
 
 fn screen_host_lobby(app: &mut App, mouse: (f32, f32)) {
     drain_net(app);
-    draw_menu_backdrop("Host", "Share this code — UK, USA, anywhere");
+    draw_menu_backdrop("Host", "Share this code — direct P2P via iroh");
     draw_text("Your session code", 84.0, 200.0, 20.0, TEXT_DIM);
     draw_text(
         &if app.host_code.is_empty() {
@@ -408,7 +408,7 @@ fn screen_host_lobby(app: &mut App, mouse: (f32, f32)) {
         TEXT_DIM,
     );
     if !app.host_addr.is_empty() {
-        draw_text(&format!("Relay: {}", app.host_addr), 84.0, 348.0, 16.0, TEXT_DIM);
+        draw_text(&format!("Transport: {}", app.host_addr), 84.0, 348.0, 16.0, TEXT_DIM);
     }
     if !app.join_status.is_empty() {
         draw_text(&app.join_status, 84.0, 380.0, 18.0, ACCENT);
@@ -473,7 +473,7 @@ fn handle_text_input(target: &mut String) {
 
 fn screen_join_lobby(app: &mut App, mouse: (f32, f32)) {
     drain_net(app);
-    draw_menu_backdrop("Join Game", "Code only — works worldwide");
+    draw_menu_backdrop("Join Game", "Code only — P2P works worldwide");
 
     if text_field(
         "Session code",

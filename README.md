@@ -18,15 +18,15 @@ cargo run --release
 
 ## Multiplayer (online, worldwide)
 
-Both players dial out to a public MQTT broker. No LAN, no port forwarding.
+Gameplay traffic uses **iroh** (P2P + public n0 relays). A short code is only used to exchange an iroh ticket via a public MQTT broker — cursors and world sync do **not** ride MQTT.
 
-1. Host: **Multiplayer → Host Game** → wait until status says online → copy the **6-digit code** → **Enter World**.
+1. Host: **Multiplayer → Host Game** → wait until status says ready → copy the **6-digit code** → **Enter World**.
 2. Friend: **Multiplayer → Join Game** → type the code → **Connect**.
 3. Host status should show a player connected / world synced. Then place buildings.
 
 Both players must use the **same release version**.
 
-Optional override:
+Optional MQTT override (ticket rendezvous only):
 
 ```bash
 FACTORY_MQTT_HOST=broker.emqx.io FACTORY_MQTT_PORT=1883 cargo run --release
