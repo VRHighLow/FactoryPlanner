@@ -1,0 +1,10 @@
+[package]
+name = "factory_relay"
+version = "0.2.0"
+edition = "2021"
+description = "Public matchmaking relay for FactoryPlanner (code rooms)."
+license = "MIT"
+
+[[bin]]
+name = "factory_relay"
+path = "src/main.rs"
