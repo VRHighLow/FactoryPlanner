@@ -55,34 +55,20 @@ jobs:
       - name: Build release
         run: cargo build --release --bin factory_planner --target ${{ matrix.target }}
 
-      - name: Package
+      - name: Stage binary
         shell: bash
         run: |
           set -euo pipefail
           BIN="target/${{ matrix.target }}/release/factory_planner"
-          OUT="${{ matrix.artifact }}"
           if [[ "${{ runner.os }}" == "Windows" ]]; then
             BIN="${BIN}.exe"
           fi
-          cp "$BIN" "$OUT"
-          mkdir -p package
-          cp "$OUT" package/
-          cp -r assets package/assets
-          (
-            cd package
-            if command -v zip >/dev/null 2>&1; then
-              zip -r "../${OUT}.zip" .
-            else
-              7z a -tzip "../${OUT}.zip" .
-            fi
-          )
+          cp "$BIN" "${{ matrix.artifact }}"
 
       - uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.artifact }}
-          path: |
-            ${{ matrix.artifact }}
-            ${{ matrix.artifact }}.zip
+          path: ${{ matrix.artifact }}
           if-no-files-found: error
 
   publish:
