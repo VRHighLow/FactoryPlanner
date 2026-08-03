@@ -813,6 +813,7 @@ fn drain_net(app: &mut App) {
                 app.peers.remove(&id);
             }
             NetEvent::Info(msg) => {
+                // Surface peer presence clearly in lobby + HUD.
                 app.join_status = msg;
             }
         }
