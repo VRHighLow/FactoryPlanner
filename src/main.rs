@@ -364,11 +364,11 @@ fn screen_multiplayer(app: &mut App, mouse: (f32, f32)) {
     if button("Host Game", bx, by, bw, bh, mouse) {
         app.stop_net();
         app.world.clear();
-        app.join_status = "Connecting online… wait for the code".into();
+        app.join_status = "Code reserved — finishing online setup…".into();
         let handle = net::start_host();
-        // Don't show the code until HostReady — ticket must be published first.
-        app.host_code.clear();
-        app.host_addr.clear();
+        // Show code immediately; P2P/MQTT finish in the background.
+        app.host_code = handle.code.clone();
+        app.host_addr = "starting…".into();
         app.net = Some(handle);
         app.screen = Screen::HostLobby;
     }
@@ -388,7 +388,7 @@ fn screen_multiplayer(app: &mut App, mouse: (f32, f32)) {
 
 fn screen_host_lobby(app: &mut App, mouse: (f32, f32)) {
     drain_net(app);
-    draw_menu_backdrop("Host", "Share this code — only after it appears below");
+    draw_menu_backdrop("Host", "Share your code — setup continues while you play");
     draw_text("Your session code", 84.0, 200.0, 20.0, TEXT_DIM);
     draw_text(
         &if app.host_code.is_empty() {
@@ -402,7 +402,7 @@ fn screen_host_lobby(app: &mut App, mouse: (f32, f32)) {
         CYAN,
     );
     draw_text(
-        "Wait for the code, then friends Join with it (same version)",
+        "Friends: Join with this code (same version). Best once status says joinable.",
         84.0,
         320.0,
         18.0,
@@ -415,10 +415,8 @@ fn screen_host_lobby(app: &mut App, mouse: (f32, f32)) {
         draw_text(&app.join_status, 84.0, 380.0, 18.0, ACCENT);
     }
     if button("Enter World", 80.0, 430.0, 280.0, 48.0, mouse) {
-        if !app.host_code.is_empty() && app.net.is_some() {
+        if app.net.is_some() {
             app.enter_game();
-        } else {
-            app.join_status = "Wait until the code appears first".into();
         }
     }
     if button("Back", 80.0, 494.0, 280.0, 48.0, mouse) {
@@ -613,7 +611,7 @@ fn drain_net(app: &mut App) {
                 app.local_player_id = player_id;
                 app.world.set_id_namespace(player_id);
                 app.join_status = if player_id == 0 {
-                    "Online — share your code".into()
+                    "Host online — share your code".into()
                 } else {
                     format!("Joined as player {player_id}")
                 };

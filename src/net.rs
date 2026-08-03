@@ -754,6 +754,17 @@ async fn run_session(
     ev_tx: Sender<NetEvent>,
     cmd_rx: Receiver<NetCommand>,
 ) {
+    // Show the code immediately so hosting isn't blocked on relay/MQTT.
+    if is_host {
+        let _ = ev_tx.send(NetEvent::HostReady {
+            code: code.clone(),
+            addr: "starting…".into(),
+        });
+        let _ = ev_tx.send(NetEvent::Info(
+            "Code ready — finishing P2P setup in background…".into(),
+        ));
+    }
+
     let memory_lookup = MemoryLookup::new();
     let endpoint = match Endpoint::builder(presets::N0)
         .address_lookup(memory_lookup.clone())
@@ -769,31 +780,42 @@ async fn run_session(
         }
     };
 
-    let _ = ev_tx.send(NetEvent::Info("Connecting to iroh relay…".into()));
-    endpoint.online().await;
-
     let gossip = Gossip::builder().spawn(endpoint.clone());
     let router = iroh::protocol::Router::builder(endpoint.clone())
         .accept(GOSSIP_ALPN, gossip.clone())
         .spawn();
 
-    // Host: publish live ticket via MQTT beacon (must PubAck before we show the code).
+    // Don't hang forever on relay — publish with whatever addrs we have, refresh later.
+    let _ = ev_tx.send(NetEvent::Info("Connecting to iroh relay…".into()));
+    match tokio::time::timeout(Duration::from_secs(6), endpoint.online()).await {
+        Ok(()) => {
+            let _ = ev_tx.send(NetEvent::Info("Relay connected — publishing join ticket…".into()));
+        }
+        Err(_) => {
+            let _ = ev_tx.send(NetEvent::Info(
+                "Relay slow — publishing join ticket anyway…".into(),
+            ));
+        }
+    }
+
+    // Host: MQTT beacon so friends can resolve the code (runs off the async runtime).
     let live_ticket = if is_host {
-        let _ = ev_tx.send(NetEvent::Info("Publishing session code…".into()));
         let t = Ticket {
             topic: ticket.topic,
             peers: vec![endpoint.addr()],
         };
         let text = t.to_string();
-        match start_ticket_beacon(&code, text) {
-            Ok((holder, stop_beacon)) => {
+        let code_bg = code.clone();
+        let beacon = tokio::task::spawn_blocking(move || start_ticket_beacon(&code_bg, text)).await;
+        match beacon {
+            Ok(Ok((holder, stop_beacon))) => {
                 let ep_bg = endpoint.clone();
                 let topic_bg = ticket.topic;
                 let holder_bg = holder.clone();
                 let stop_bg = stop_beacon.clone();
                 thread::spawn(move || {
                     while !stop_bg.load(Ordering::SeqCst) {
-                        thread::sleep(Duration::from_secs(20));
+                        thread::sleep(Duration::from_secs(12));
                         if stop_bg.load(Ordering::SeqCst) {
                             break;
                         }
@@ -806,7 +828,21 @@ async fn run_session(
                         }
                     }
                 });
+                let _ = ev_tx.send(NetEvent::HostReady {
+                    code: code.clone(),
+                    addr: "iroh P2P · joinable".into(),
+                });
+                let _ = ev_tx.send(NetEvent::Info(
+                    "Join ticket live — friends can connect now.".into(),
+                ));
                 Some(stop_beacon)
+            }
+            Ok(Err(e)) => {
+                let _ = ev_tx.send(NetEvent::JoinFailed {
+                    reason: format!("code publish failed: {e}"),
+                });
+                let _ = router.shutdown().await;
+                return;
             }
             Err(e) => {
                 let _ = ev_tx.send(NetEvent::JoinFailed {
@@ -837,14 +873,7 @@ async fn run_session(
     };
 
     if is_host {
-        let _ = ev_tx.send(NetEvent::HostReady {
-            code: code.clone(),
-            addr: "iroh P2P".into(),
-        });
         let _ = ev_tx.send(NetEvent::Joined { player_id: 0 });
-        let _ = ev_tx.send(NetEvent::Info(
-            "Code is live — share it now (stay in lobby or world).".into(),
-        ));
     } else {
         let _ = ev_tx.send(NetEvent::Joined {
             player_id: local_id,
