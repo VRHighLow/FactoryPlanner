@@ -1,0 +1,14 @@
+[package]
+name = "factory_planner"
+version = "0.1.0"
+edition = "2021"
+description = "Factory planner — dual-lane conveyors, power poles, LAN multiplayer."
+license = "MIT"
+repository = "https://github.com/VRHighLow/FactoryPlanner"
+
+[dependencies]
+macroquad = "0.4"
+
+[profile.release]
+lto = true
+codegen-units = 1
