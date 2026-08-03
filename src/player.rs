@@ -104,96 +104,197 @@ impl Player {
         }
 
         self.bob += dt * (2.4 + speed * 0.01);
-        self.update_trails(dt, speed, wish.length() > 0.1);
+        update_trails(
+            &mut self.trail,
+            &mut self.spawn_acc,
+            dt,
+            self.x,
+            self.y,
+            self.vx,
+            self.vy,
+            self.facing,
+            speed,
+            wish.length() > 0.1,
+        );
+    }
+}
+
+/// Networked peer drone: smooth chase + local thruster FX (effects aren't synced).
+#[derive(Clone, Debug)]
+pub struct RemoteDrone {
+    pub x: f32,
+    pub y: f32,
+    pub vx: f32,
+    pub vy: f32,
+    pub facing: f32,
+    bob: f32,
+    trail: Vec<TrailPuff>,
+    spawn_acc: f32,
+    target_x: f32,
+    target_y: f32,
+    target_facing: f32,
+}
+
+impl RemoteDrone {
+    pub fn new(x: f32, y: f32, facing: f32) -> Self {
+        Self {
+            x,
+            y,
+            vx: 0.0,
+            vy: 0.0,
+            facing,
+            bob: 0.0,
+            trail: Vec::with_capacity(TRAIL_CAP),
+            spawn_acc: 0.0,
+            target_x: x,
+            target_y: y,
+            target_facing: facing,
+        }
     }
 
-    fn update_trails(&mut self, dt: f32, speed: f32, thrusting: bool) {
-        for p in &mut self.trail {
-            p.age += dt;
-            p.x += p.vx * dt;
-            p.y += p.vy * dt;
-            // Curl slightly outward so the wake feels turbulent.
-            let ox = -p.vy * 0.35 * p.side * dt;
-            let oy = p.vx * 0.35 * p.side * dt;
-            p.vx += ox;
-            p.vy += oy;
-            p.vx *= 1.0 - 2.2 * dt;
-            p.vy *= 1.0 - 2.2 * dt;
-            p.size *= 1.0 + 0.55 * dt;
-            p.warm *= 1.0 - 1.1 * dt;
-        }
-        self.trail.retain(|p| p.age < p.life);
+    pub fn set_target(&mut self, x: f32, y: f32, facing: f32) {
+        self.target_x = x;
+        self.target_y = y;
+        self.target_facing = facing;
+    }
 
-        let throttle = (speed / PLAYER_SPEED).clamp(0.0, 1.0);
-        let rate = if thrusting {
-            TRAIL_SPAWN_RATE * (0.4 + 0.6 * throttle)
+    pub fn tick(&mut self, dt: f32) {
+        // Critically-damped-ish chase so packets don't snap the hull.
+        let follow = 1.0 - (-16.0 * dt).exp();
+        let nx = self.x + (self.target_x - self.x) * follow;
+        let ny = self.y + (self.target_y - self.y) * follow;
+        if dt > 1e-6 {
+            // Blend measured velocity so trail kick stays stable.
+            let mvx = (nx - self.x) / dt;
+            let mvy = (ny - self.y) / dt;
+            self.vx = self.vx * 0.35 + mvx * 0.65;
+            self.vy = self.vy * 0.35 + mvy * 0.65;
+        }
+        self.x = nx;
+        self.y = ny;
+
+        let speed = vec2(self.vx, self.vy).length();
+        let face_t = if speed > 12.0 { 14.0 } else { 8.0 };
+        self.facing = lerp_angle(
+            self.facing,
+            self.target_facing,
+            (face_t * dt).min(1.0),
+        );
+
+        self.bob += dt * (2.4 + speed * 0.01);
+        let thrusting = speed > 18.0;
+        update_trails(
+            &mut self.trail,
+            &mut self.spawn_acc,
+            dt,
+            self.x,
+            self.y,
+            self.vx,
+            self.vy,
+            self.facing,
+            speed,
+            thrusting,
+        );
+    }
+}
+
+fn update_trails(
+    trail: &mut Vec<TrailPuff>,
+    spawn_acc: &mut f32,
+    dt: f32,
+    x: f32,
+    y: f32,
+    vx: f32,
+    vy: f32,
+    facing: f32,
+    speed: f32,
+    thrusting: bool,
+) {
+    for p in trail.iter_mut() {
+        p.age += dt;
+        p.x += p.vx * dt;
+        p.y += p.vy * dt;
+        // Curl slightly outward so the wake feels turbulent.
+        let ox = -p.vy * 0.35 * p.side * dt;
+        let oy = p.vx * 0.35 * p.side * dt;
+        p.vx += ox;
+        p.vy += oy;
+        p.vx *= 1.0 - 2.2 * dt;
+        p.vy *= 1.0 - 2.2 * dt;
+        p.size *= 1.0 + 0.55 * dt;
+        p.warm *= 1.0 - 1.1 * dt;
+    }
+    trail.retain(|p| p.age < p.life);
+
+    let throttle = (speed / PLAYER_SPEED).clamp(0.0, 1.0);
+    let rate = if thrusting {
+        TRAIL_SPAWN_RATE * (0.4 + 0.6 * throttle)
+    } else {
+        14.0
+    };
+    *spawn_acc += rate * dt;
+
+    let fx = facing.cos();
+    let fy = facing.sin();
+    let px = -fy;
+    let py = fx;
+
+    while *spawn_acc >= 1.0 && trail.len() < TRAIL_CAP {
+        *spawn_acc -= 1.0;
+        let side = if rand_f() < 0.5 { -1.0 } else { 1.0 };
+        // Twin nozzles at the stern.
+        let along = -11.0 + (rand_f() - 0.5) * 2.0;
+        let lateral = side * (5.2 + rand_f() * 1.2);
+        let ox = fx * along + px * lateral;
+        let oy = fy * along + py * lateral;
+
+        let kick = if thrusting {
+            36.0 + throttle * 55.0
         } else {
             14.0
         };
-        self.spawn_acc += rate * dt;
+        let jx = (rand_f() - 0.5) * 12.0;
+        let jy = (rand_f() - 0.5) * 12.0;
+        let tvx = -fx * kick + jx - vx * 0.2;
+        let tvy = -fy * kick + jy - vy * 0.2;
 
-        let fx = self.facing.cos();
-        let fy = self.facing.sin();
-        let px = -fy;
-        let py = fx;
+        // Mix of hot cores and cooler smoke shells.
+        let layer = rand_f();
+        let (warm, size, life, stretch) = if layer < 0.35 {
+            (
+                0.85 + rand_f() * 0.15,
+                2.0 + throttle * 1.5,
+                TRAIL_LIFE * 0.45,
+                2.8 + throttle * 2.0,
+            )
+        } else if layer < 0.7 {
+            (
+                0.45 + rand_f() * 0.25,
+                3.2 + throttle * 2.2,
+                TRAIL_LIFE * 0.75,
+                2.0 + throttle,
+            )
+        } else {
+            (
+                0.08 + rand_f() * 0.12,
+                4.5 + throttle * 3.0,
+                TRAIL_LIFE * (0.9 + rand_f() * 0.3),
+                1.2,
+            )
+        };
 
-        while self.spawn_acc >= 1.0 && self.trail.len() < TRAIL_CAP {
-            self.spawn_acc -= 1.0;
-            let side = if rand_f() < 0.5 { -1.0 } else { 1.0 };
-            // Twin nozzles at the stern.
-            let along = -11.0 + (rand_f() - 0.5) * 2.0;
-            let lateral = side * (5.2 + rand_f() * 1.2);
-            let ox = fx * along + px * lateral;
-            let oy = fy * along + py * lateral;
-
-            let kick = if thrusting {
-                36.0 + throttle * 55.0
-            } else {
-                14.0
-            };
-            let jx = (rand_f() - 0.5) * 12.0;
-            let jy = (rand_f() - 0.5) * 12.0;
-            let tvx = -fx * kick + jx - self.vx * 0.2;
-            let tvy = -fy * kick + jy - self.vy * 0.2;
-
-            // Mix of hot cores and cooler smoke shells.
-            let layer = rand_f();
-            let (warm, size, life, stretch) = if layer < 0.35 {
-                (
-                    0.85 + rand_f() * 0.15,
-                    2.0 + throttle * 1.5,
-                    TRAIL_LIFE * 0.45,
-                    2.8 + throttle * 2.0,
-                )
-            } else if layer < 0.7 {
-                (
-                    0.45 + rand_f() * 0.25,
-                    3.2 + throttle * 2.2,
-                    TRAIL_LIFE * 0.75,
-                    2.0 + throttle,
-                )
-            } else {
-                (
-                    0.08 + rand_f() * 0.12,
-                    4.5 + throttle * 3.0,
-                    TRAIL_LIFE * (0.9 + rand_f() * 0.3),
-                    1.2,
-                )
-            };
-
-            self.trail.push(TrailPuff {
-                x: self.x + ox,
-                y: self.y + oy,
-                vx: tvx,
-                vy: tvy,
-                age: 0.0,
-                life: life * (0.85 + rand_f() * 0.3),
-                size: if thrusting { size } else { size * 0.65 },
-                warm: if thrusting { warm } else { warm * 0.25 },
-                stretch: if thrusting { stretch } else { 1.0 },
-                side,
-            });
-        }
+        trail.push(TrailPuff {
+            x: x + ox,
+            y: y + oy,
+            vx: tvx,
+            vy: tvy,
+            age: 0.0,
+            life: life * (0.85 + rand_f() * 0.3),
+            size: if thrusting { size } else { size * 0.65 },
+            warm: if thrusting { warm } else { warm * 0.25 },
+            stretch: if thrusting { stretch } else { 1.0 },
+            side,
+        });
     }
 }
 
@@ -246,18 +347,29 @@ pub fn draw_player(
     );
 }
 
-/// Remote peer drone — no trails, nameplate under hull.
+/// Remote peer drone with local thruster FX + nameplate.
 pub fn draw_drone_remote(
-    x: f32,
-    y: f32,
-    facing: f32,
+    drone: &RemoteDrone,
     cam_x: f32,
     cam_y: f32,
     zoom: f32,
     accent: Color,
     name: Option<&str>,
 ) {
-    draw_drone_full(x, y, facing, 0.0, 0.0, 0.0, cam_x, cam_y, zoom, accent, None, name);
+    draw_drone_full(
+        drone.x,
+        drone.y,
+        drone.facing,
+        drone.bob,
+        drone.vx,
+        drone.vy,
+        cam_x,
+        cam_y,
+        zoom,
+        accent,
+        Some(&drone.trail),
+        name,
+    );
 }
 
 fn draw_drone_full(

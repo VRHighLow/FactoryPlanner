@@ -261,12 +261,8 @@ struct PeerPresence {
     y: f32,
     vx: f32,
     vy: f32,
-    /// Drone body.
-    dx: f32,
-    dy: f32,
-    dvx: f32,
-    dvy: f32,
-    dfacing: f32,
+    /// Smoothed drone + local thruster FX.
+    drone: player::RemoteDrone,
     selected: Option<BuildingKind>,
     facing: Facing,
     last_sample_t: f32,
@@ -1577,20 +1573,7 @@ fn advance_peer_cursors(app: &mut App, dt: f32) {
         if peer.vy.abs() < 1.0 {
             peer.vy = 0.0;
         }
-
-        peer.dx += peer.dvx * dt;
-        peer.dy += peer.dvy * dt;
-        peer.dvx *= 0.9;
-        peer.dvy *= 0.9;
-        if peer.dvx.abs() < 1.0 {
-            peer.dvx = 0.0;
-        }
-        if peer.dvy.abs() < 1.0 {
-            peer.dvy = 0.0;
-        }
-        if peer.dvx * peer.dvx + peer.dvy * peer.dvy > 64.0 {
-            peer.dfacing = peer.dvy.atan2(peer.dvx);
-        }
+        peer.drone.tick(dt);
     }
 }
 
@@ -1769,11 +1752,7 @@ fn drain_net(app: &mut App) {
                     peer.vy = (y - peer.y) / dt;
                     peer.x = peer.x * 0.25 + x * 0.75;
                     peer.y = peer.y * 0.25 + y * 0.75;
-                    peer.dvx = (dx - peer.dx) / dt;
-                    peer.dvy = (dy - peer.dy) / dt;
-                    peer.dx = peer.dx * 0.25 + dx * 0.75;
-                    peer.dy = peer.dy * 0.25 + dy * 0.75;
-                    peer.dfacing = dfacing;
+                    peer.drone.set_target(dx, dy, dfacing);
                     peer.selected = selected;
                     peer.facing = facing;
                     peer.last_sample_t = t_ms;
@@ -1786,11 +1765,7 @@ fn drain_net(app: &mut App) {
                             y,
                             vx: 0.0,
                             vy: 0.0,
-                            dx,
-                            dy,
-                            dvx: 0.0,
-                            dvy: 0.0,
-                            dfacing,
+                            drone: player::RemoteDrone::new(dx, dy, dfacing),
                             selected,
                             facing,
                             last_sample_t: t_ms,
@@ -1851,6 +1826,10 @@ fn send_cursor_if_due(app: &mut App, wx: f32, wy: f32) {
     let Some(net) = app.net.as_ref() else {
         return;
     };
+    // Cap at ~20 Hz — flooding every frame made remote drones jitter.
+    if app.last_cursor_send.elapsed().as_millis() < 50 {
+        return;
+    }
     app.last_cursor_send = Instant::now();
     app.last_cursor_x = wx;
     app.last_cursor_y = wy;
@@ -4471,9 +4450,7 @@ fn draw_peer_cursors(app: &App) {
         let color = peer_color(peer.id);
         // Remote drone (other players only — never the local one).
         player::draw_drone_remote(
-            peer.dx,
-            peer.dy,
-            peer.dfacing,
+            &peer.drone,
             app.cam.x,
             app.cam.y,
             app.cam.zoom,
