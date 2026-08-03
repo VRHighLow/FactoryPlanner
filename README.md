@@ -12,9 +12,9 @@ cargo run --release
 
 - **Play → Single Player** or **Multiplayer**
 - **Host**: get a 6-digit code. Friends Join with that code only (no IP / port forwarding).
-- Place **Conveyors** (Transport) end-to-end so ports nearly touch — items travel along each segment; **longer belts = longer travel time**.
-- Dual lanes on each conveyor (Factorio-style).
-- Power: wire Solar → Power Pole (orange). Machines need a live pole field.
+- **Belts**: click an item port, then another (same as power wires). Longer wires = longer travel time. Use a **Splitter** to branch.
+- **Power**: wire Solar → Power Pole (orange). Machines need a live pole field.
+- Dual lanes on each belt wire.
 
 ## Multiplayer (online, worldwide)
 

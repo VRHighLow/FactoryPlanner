@@ -14,7 +14,7 @@ const GRID_MAJOR_EVERY: i32 = 10;
 const PORT_HIT: f32 = 14.0;
 const HOTBAR_SLOTS: usize = 9;
 const BELT_HALF_WIDTH: f32 = 7.0;
-const CURSOR_SEND_MS: u128 = 50;
+const CURSOR_SEND_MS: u128 = 16;
 
 const BG: Color = Color::from_rgba(22, 26, 32, 255);
 const GRID_MINOR_C: Color = Color::from_rgba(48, 56, 68, 90);
@@ -23,7 +23,6 @@ const NODE_BG: Color = Color::from_rgba(28, 32, 40, 245);
 const NODE_BORDER: Color = Color::from_rgba(120, 140, 160, 180);
 const CYAN: Color = Color::from_rgba(64, 220, 210, 255);
 const CYAN_DIM: Color = Color::from_rgba(64, 220, 210, 100);
-const DOCK_C: Color = Color::from_rgba(64, 220, 210, 70);
 const BELT_YELLOW: Color = Color::from_rgba(210, 170, 55, 255);
 const BELT_DARK: Color = Color::from_rgba(50, 44, 28, 255);
 const POWER_C: Color = Color::from_rgba(255, 190, 70, 255);
@@ -50,6 +49,8 @@ struct PeerPresence {
     id: u8,
     x: f32,
     y: f32,
+    target_x: f32,
+    target_y: f32,
     selected: Option<BuildingKind>,
     facing: Facing,
 }
@@ -203,6 +204,7 @@ async fn main() {
                 handle_pan_zoom(&mut app, mouse);
                 handle_world_input(&mut app, mouse, wx, wy);
                 send_cursor_if_due(&mut app, wx, wy);
+                lerp_peer_cursors(&mut app, dt);
                 app.world.tick(dt);
                 draw_game(&mut app, mouse, wx, wy);
             }
@@ -475,6 +477,51 @@ fn screen_join_lobby(app: &mut App, mouse: (f32, f32)) {
     }
 }
 
+fn send_world_snapshot(app: &App) {
+    let Some(net) = app.net.as_ref() else {
+        return;
+    };
+    let mut ids: Vec<u32> = app.world.nodes.keys().copied().collect();
+    ids.sort_unstable();
+    for id in ids {
+        if let Some(n) = app.world.nodes.get(&id) {
+            let _ = net.tx.send(NetCommand::Place {
+                id,
+                kind: n.kind,
+                x: n.x,
+                y: n.y,
+                facing: n.facing,
+            });
+        }
+    }
+    for l in &app.world.links {
+        let _ = net.tx.send(NetCommand::Link {
+            power: true,
+            from_node: l.from_node,
+            from_port: l.from_port,
+            to_node: l.to_node,
+            to_port: l.to_port,
+        });
+    }
+    for l in &app.world.belts {
+        let _ = net.tx.send(NetCommand::Link {
+            power: false,
+            from_node: l.from_node,
+            from_port: l.from_port,
+            to_node: l.to_node,
+            to_port: l.to_port,
+        });
+    }
+}
+
+fn lerp_peer_cursors(app: &mut App, dt: f32) {
+    let t = (dt * 18.0).clamp(0.0, 1.0);
+    for peer in app.peers.values_mut() {
+        peer.x += (peer.target_x - peer.x) * t;
+        peer.y += (peer.target_y - peer.y) * t;
+    }
+}
+
 fn drain_net(app: &mut App) {
     let events: Vec<NetEvent> = match app.net.as_ref() {
         Some(net) => {
@@ -495,6 +542,7 @@ fn drain_net(app: &mut App) {
             }
             NetEvent::Joined { player_id } => {
                 app.local_player_id = player_id;
+                app.world.set_id_namespace(player_id);
                 app.join_status = if player_id == 0 {
                     "Online — share your code".into()
                 } else {
@@ -508,6 +556,11 @@ fn drain_net(app: &mut App) {
                 app.join_status = format!("Failed: {reason}");
                 app.net = None;
             }
+            NetEvent::PeerHello { .. } => {
+                if app.net.as_ref().map(|n| n.is_host).unwrap_or(false) {
+                    send_world_snapshot(app);
+                }
+            }
             NetEvent::PeerCursor {
                 id,
                 x,
@@ -516,16 +569,25 @@ fn drain_net(app: &mut App) {
                 facing,
             } => {
                 if id != app.local_player_id {
-                    app.peers.insert(
-                        id,
-                        PeerPresence {
+                    if let Some(peer) = app.peers.get_mut(&id) {
+                        peer.target_x = x;
+                        peer.target_y = y;
+                        peer.selected = selected;
+                        peer.facing = facing;
+                    } else {
+                        app.peers.insert(
                             id,
-                            x,
-                            y,
-                            selected,
-                            facing,
-                        },
-                    );
+                            PeerPresence {
+                                id,
+                                x,
+                                y,
+                                target_x: x,
+                                target_y: y,
+                                selected,
+                                facing,
+                            },
+                        );
+                    }
                 }
             }
             NetEvent::PeerPlace {
@@ -539,6 +601,29 @@ fn drain_net(app: &mut App) {
             }
             NetEvent::PeerRemove { id } => {
                 app.world.remove_node(id);
+            }
+            NetEvent::PeerMove { id, x, y } => {
+                app.world.force_move_node(id, x, y);
+            }
+            NetEvent::PeerRotate { id, facing } => {
+                app.world.force_set_facing(id, facing);
+            }
+            NetEvent::PeerLink {
+                power,
+                from_node,
+                from_port,
+                to_node,
+                to_port,
+            } => {
+                if power {
+                    let _ = app
+                        .world
+                        .connect_power((from_node, from_port), (to_node, to_port));
+                } else {
+                    let _ = app
+                        .world
+                        .connect_belt((from_node, from_port), (to_node, to_port));
+                }
             }
             NetEvent::PeerGone { id } => {
                 app.peers.remove(&id);
@@ -567,29 +652,46 @@ fn send_cursor_if_due(app: &mut App, wx: f32, wy: f32) {
 }
 
 fn handle_hotkeys(app: &mut App, wx: f32, wy: f32) {
-    let ui = &mut app.ui;
-    let world = &mut app.world;
-
     if is_key_pressed(KeyCode::B) {
-        ui.build_open = !ui.build_open;
-        if ui.build_open {
-            ui.wire_from = None;
+        app.ui.build_open = !app.ui.build_open;
+        if app.ui.build_open {
+            app.ui.wire_from = None;
         }
     }
     if is_key_pressed(KeyCode::Escape) {
-        if ui.build_open {
-            ui.build_open = false;
+        if app.ui.build_open {
+            app.ui.build_open = false;
         } else {
-            ui.selected = None;
-            ui.wire_from = None;
+            app.ui.selected = None;
+            app.ui.wire_from = None;
         }
     }
     if is_key_pressed(KeyCode::R) {
-        ui.place_facing = ui.place_facing.rotate_cw();
-        if let Some(id) = ui.drag_node {
-            let _ = world.try_rotate_node(id);
-        } else if let Some(id) = world.hit_node(wx, wy) {
-            let _ = world.try_rotate_node(id);
+        app.ui.place_facing = app.ui.place_facing.rotate_cw();
+        let rotated_id = if let Some(id) = app.ui.drag_node {
+            if app.world.try_rotate_node(id) {
+                Some(id)
+            } else {
+                None
+            }
+        } else if let Some(id) = app.world.hit_node(wx, wy) {
+            if app.world.try_rotate_node(id) {
+                Some(id)
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+        if let Some(id) = rotated_id {
+            if let Some(n) = app.world.nodes.get(&id) {
+                if let Some(net) = app.net.as_ref() {
+                    let _ = net.tx.send(NetCommand::Rotate {
+                        id,
+                        facing: n.facing,
+                    });
+                }
+            }
         }
     }
 
@@ -608,14 +710,14 @@ fn handle_hotkeys(app: &mut App, wx: f32, wy: f32) {
     .enumerate()
     {
         if is_key_pressed(*key) {
-            if ui.build_open {
-                if let Some(kind) = ui.selected {
-                    ui.hotbar[i] = Some(kind);
+            if app.ui.build_open {
+                if let Some(kind) = app.ui.selected {
+                    app.ui.hotbar[i] = Some(kind);
                 }
             } else {
-                ui.hotbar_index = i;
-                ui.selected = ui.hotbar[i];
-                ui.wire_from = None;
+                app.ui.hotbar_index = i;
+                app.ui.selected = app.ui.hotbar[i];
+                app.ui.wire_from = None;
             }
         }
     }
@@ -708,6 +810,20 @@ fn remove_building(app: &mut App, id: u32) {
     }
 }
 
+fn connect_ports_net(app: &mut App, from: (u32, usize), to: (u32, usize)) {
+    if let Some((power, a, b)) = app.world.connect_ports(from, to) {
+        if let Some(net) = app.net.as_ref() {
+            let _ = net.tx.send(NetCommand::Link {
+                power,
+                from_node: a.0,
+                from_port: a.1,
+                to_node: b.0,
+                to_port: b.1,
+            });
+        }
+    }
+}
+
 fn handle_world_input(app: &mut App, mouse: (f32, f32), wx: f32, wy: f32) {
     if app.ui.build_open || app.ui.panning {
         return;
@@ -728,14 +844,15 @@ fn handle_world_input(app: &mut App, mouse: (f32, f32), wx: f32, wy: f32) {
     let port_r = PORT_HIT / app.cam.zoom;
 
     if is_mouse_button_pressed(MouseButton::Left) {
-        if let Some(port) = app.world.hit_energy_port(wx, wy, port_r) {
+        if let Some(port) = app.world.hit_port(wx, wy, port_r) {
             if let Some(from) = app.ui.wire_from {
                 if from != port {
-                    app.world.connect_power(from, port);
+                    connect_ports_net(app, from, port);
                 }
                 app.ui.wire_from = None;
             } else {
                 app.ui.wire_from = Some(port);
+                app.ui.selected = None;
             }
             return;
         }
@@ -763,7 +880,17 @@ fn handle_world_input(app: &mut App, mouse: (f32, f32), wx: f32, wy: f32) {
         }
     }
     if is_mouse_button_released(MouseButton::Left) {
-        app.ui.drag_node = None;
+        if let Some(id) = app.ui.drag_node.take() {
+            if let Some(n) = app.world.nodes.get(&id) {
+                if let Some(net) = app.net.as_ref() {
+                    let _ = net.tx.send(NetCommand::Move {
+                        id,
+                        x: n.x,
+                        y: n.y,
+                    });
+                }
+            }
+        }
     }
     if let Some(id) = app.ui.drag_node {
         if is_mouse_button_down(MouseButton::Left) {
@@ -787,12 +914,19 @@ fn draw_game(app: &mut App, mouse: (f32, f32), wx: f32, wy: f32) {
     clear_background(BG);
     draw_infinite_grid(&app.cam);
     draw_power_fields(&app.world, &app.cam);
-    draw_docks(&app.world, &app.cam);
+    draw_belt_links(&app.world, &app.cam, &app.ui, wx, wy);
     draw_power_links(&app.world, &app.cam, &app.ui, wx, wy);
     draw_nodes(&app.world, &app.cam);
     draw_placement_ghost(&app.world, &app.ui, &app.cam, wx, wy);
     draw_peer_cursors(app);
     draw_hotbar(&app.ui);
+    draw_text(
+        "Belts: click item ports to wire  ·  Power: click energy ports",
+        16.0,
+        screen_height() - 12.0,
+        16.0,
+        TEXT_DIM,
+    );
     if let Some(net) = app.net.as_ref() {
         if net.is_host {
             draw_text(
@@ -908,64 +1042,78 @@ fn draw_power_links(world: &World, cam: &Cam, ui: &Ui, wx: f32, wy: f32) {
 
     if let Some((nid, pid)) = ui.wire_from {
         if let Some(n) = world.nodes.get(&nid) {
-            if let Some((ax, ay)) = n.port_world(pid) {
-                draw_power_manhattan(cam, ax, ay, wx, wy, Color::from_rgba(255, 190, 70, 150));
+            if let Some(p) = n.ports.get(pid) {
+                if p.kind.is_energy() {
+                    if let Some((ax, ay)) = n.port_world(pid) {
+                        draw_power_manhattan(
+                            cam,
+                            ax,
+                            ay,
+                            wx,
+                            wy,
+                            Color::from_rgba(255, 190, 70, 150),
+                        );
+                    }
+                }
             }
         }
     }
 }
 
-fn draw_docks(world: &World, cam: &Cam) {
-    for (a, ai, b, bi) in world.find_docks() {
-        let Some(na) = world.nodes.get(&a) else {
+fn draw_belt_links(world: &World, cam: &Cam, ui: &Ui, wx: f32, wy: f32) {
+    for belt in &world.belts {
+        let Some(a) = world.nodes.get(&belt.from_node) else {
             continue;
         };
-        let Some(nb) = world.nodes.get(&b) else {
+        let Some(b) = world.nodes.get(&belt.to_node) else {
             continue;
         };
-        let Some((ax, ay)) = na.port_world(ai) else {
+        let Some((ax, ay)) = a.port_world(belt.from_port) else {
             continue;
         };
-        let Some((bx, by)) = nb.port_world(bi) else {
+        let Some((bx, by)) = b.port_world(belt.to_port) else {
             continue;
         };
         let (sx0, sy0) = cam.world_to_screen(ax, ay);
         let (sx1, sy1) = cam.world_to_screen(bx, by);
-        draw_line(sx0, sy0, sx1, sy1, 1.5, DOCK_C);
-    }
-}
+        let mx = (sx0 + sx1) * 0.5;
+        let hw = (BELT_HALF_WIDTH * cam.zoom).clamp(3.0, 12.0);
+        draw_line(sx0, sy0, mx, sy0, hw * 2.0, BELT_DARK);
+        draw_line(mx, sy0, mx, sy1, hw * 2.0, BELT_DARK);
+        draw_line(mx, sy1, sx1, sy1, hw * 2.0, BELT_DARK);
+        draw_line(sx0, sy0, mx, sy0, hw * 2.0 - 2.0, BELT_YELLOW);
+        draw_line(mx, sy0, mx, sy1, hw * 2.0 - 2.0, BELT_YELLOW);
+        draw_line(mx, sy1, sx1, sy1, hw * 2.0 - 2.0, BELT_YELLOW);
 
-fn draw_belt_segment(cam: &Cam, n: &Node) {
-    let Some((ix, iy)) = n.port_world(0) else {
-        return;
-    };
-    let (ox, oy) = if n.kind == BuildingKind::Conveyor {
-        n.port_world(1).unwrap_or(n.center())
-    } else {
-        let (cx, cy) = n.center();
-        match n.facing {
-            Facing::E => (n.x + n.w(), cy),
-            Facing::W => (n.x, cy),
-            Facing::S => (cx, n.y + n.h()),
-            Facing::N => (cx, n.y),
+        for lane in 0..2 {
+            for it in &belt.lanes[lane].items {
+                let (iwx, iwy) = belt_item_world(world, belt, lane, it.dist);
+                let (sx, sy) = cam.world_to_screen(iwx, iwy);
+                let c = match it.item {
+                    Item::IronOre => ORE_C,
+                    Item::IronIngot => INGOT_C,
+                };
+                draw_circle(sx, sy, (4.0 * cam.zoom).clamp(2.5, 6.0), c);
+            }
         }
-    };
-    let (sx0, sy0) = cam.world_to_screen(ix, iy);
-    let (sx1, sy1) = cam.world_to_screen(ox, oy);
-    let hw = (BELT_HALF_WIDTH * cam.zoom).clamp(3.0, 14.0);
-    draw_line(sx0, sy0, sx1, sy1, hw * 2.0, BELT_DARK);
-    draw_line(sx0, sy0, sx1, sy1, hw * 2.0 - 2.0, BELT_YELLOW);
-    draw_line(sx0, sy0, sx1, sy1, 1.2, BELT_DARK);
+    }
 
-    for lane in 0..2 {
-        for it in &n.lanes[lane].items {
-            let (wx, wy) = belt_item_world(n, lane, it.dist);
-            let (sx, sy) = cam.world_to_screen(wx, wy);
-            let c = match it.item {
-                Item::IronOre => ORE_C,
-                Item::IronIngot => INGOT_C,
-            };
-            draw_circle(sx, sy, (4.0 * cam.zoom).clamp(2.5, 6.0), c);
+    if let Some((nid, pid)) = ui.wire_from {
+        if let Some(n) = world.nodes.get(&nid) {
+            if let Some(p) = n.ports.get(pid) {
+                if !p.kind.is_energy() {
+                    if let Some((ax, ay)) = n.port_world(pid) {
+                        draw_power_manhattan(
+                            cam,
+                            ax,
+                            ay,
+                            wx,
+                            wy,
+                            Color::from_rgba(210, 170, 55, 160),
+                        );
+                    }
+                }
+            }
         }
     }
 }
@@ -975,26 +1123,7 @@ fn draw_nodes(world: &World, cam: &Cam) {
     ids.sort_unstable();
     for id in ids {
         if let Some(n) = world.nodes.get(&id) {
-            if n.kind.is_belt() {
-                draw_belt_segment(cam, n);
-                // light frame so belts remain selectable
-                let (sx, sy) = cam.world_to_screen(n.x, n.y);
-                let w = n.w() * cam.zoom;
-                let h = n.h() * cam.zoom;
-                draw_rectangle_lines(sx, sy, w, h, 1.0, Color::from_rgba(120, 140, 160, 80));
-                for p in &n.ports {
-                    let (px, py) = cam.world_to_screen(n.x + p.ox, n.y + p.oy);
-                    let r = (5.0 * cam.zoom).clamp(3.5, 8.0);
-                    if p.kind.is_item_out() {
-                        draw_circle(px, py, r, CYAN);
-                    } else {
-                        draw_circle(px, py, r, Color::from_rgba(30, 36, 44, 255));
-                        draw_circle_lines(px, py, r, 2.0, CYAN);
-                    }
-                }
-            } else {
-                draw_node(cam, n);
-            }
+            draw_node(cam, n);
         }
     }
 }
@@ -1048,7 +1177,7 @@ fn draw_node(cam: &Cam, n: &Node) {
             if n.powered { "Powered" } else { "No power" }
         ),
         BuildingKind::Box => format!("ore {:.0}\ningot {:.0}", n.store_ore, n.store_ingot),
-        BuildingKind::Conveyor | BuildingKind::Splitter => String::new(),
+        BuildingKind::Splitter => String::new(),
     };
 
     let line_h = 15.0 * cam.zoom;

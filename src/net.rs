@@ -19,6 +19,7 @@ pub enum NetEvent {
     HostReady { code: String, addr: String },
     Joined { player_id: u8 },
     JoinFailed { reason: String },
+    PeerHello { id: u8 },
     PeerCursor {
         id: u8,
         x: f32,
@@ -34,6 +35,15 @@ pub enum NetEvent {
         facing: Facing,
     },
     PeerRemove { id: u32 },
+    PeerMove { id: u32, x: f32, y: f32 },
+    PeerRotate { id: u32, facing: Facing },
+    PeerLink {
+        power: bool,
+        from_node: u32,
+        from_port: usize,
+        to_node: u32,
+        to_port: usize,
+    },
     PeerGone { id: u8 },
     Info(String),
 }
@@ -56,6 +66,22 @@ pub enum NetCommand {
     },
     Remove {
         id: u32,
+    },
+    Move {
+        id: u32,
+        x: f32,
+        y: f32,
+    },
+    Rotate {
+        id: u32,
+        facing: Facing,
+    },
+    Link {
+        power: bool,
+        from_node: u32,
+        from_port: usize,
+        to_node: u32,
+        to_port: usize,
     },
 }
 
@@ -86,7 +112,7 @@ fn gen_code() -> String {
 }
 
 fn topic(code: &str) -> String {
-    format!("factoryplanner/v1/{code}")
+    format!("factoryplanner/v2/{code}")
 }
 
 fn kind_opt(k: Option<BuildingKind>) -> String {
@@ -109,7 +135,7 @@ fn encode(parts: &[&str]) -> String {
 fn parse_peer(raw: &str, local_id: u8, ev: &Sender<NetEvent>) {
     let p: Vec<&str> = raw.trim().split('|').collect();
     match p.first().copied() {
-        Some("CUR") if p.len() >= 6 => {
+        Some("CUR") if p.len() >= 7 => {
             let id = p[1].parse().unwrap_or(255);
             if id == local_id {
                 return;
@@ -122,29 +148,69 @@ fn parse_peer(raw: &str, local_id: u8, ev: &Sender<NetEvent>) {
                 facing: Facing::from_u8(p[5].parse().unwrap_or(0)),
             });
         }
-        Some("PLACE") if p.len() >= 6 => {
-            // Apply remote places only (local already applied).
-            // Host id 0 and clients may both place — sync all PLACE messages;
-            // local sender still receives own echo — skip if we want by checking...
-            // We can't know if we sent it easily; duplicate place_node_with_id is OK (same id).
-            if let Some(kind) = BuildingKind::from_u8(p[2].parse().unwrap_or(255)) {
+        Some("PLACE") if p.len() >= 8 => {
+            let owner: u8 = p[1].parse().unwrap_or(255);
+            if owner == local_id {
+                return;
+            }
+            if let Some(kind) = BuildingKind::from_u8(p[3].parse().unwrap_or(255)) {
                 let _ = ev.send(NetEvent::PeerPlace {
-                    id: p[1].parse().unwrap_or(0),
+                    id: p[2].parse().unwrap_or(0),
                     kind,
-                    x: p[3].parse().unwrap_or(0.0),
-                    y: p[4].parse().unwrap_or(0.0),
-                    facing: Facing::from_u8(p[5].parse().unwrap_or(0)),
+                    x: p[4].parse().unwrap_or(0.0),
+                    y: p[5].parse().unwrap_or(0.0),
+                    facing: Facing::from_u8(p[6].parse().unwrap_or(0)),
                 });
             }
         }
-        Some("REM") if p.len() >= 2 => {
-            if let Ok(id) = p[1].parse() {
+        Some("REM") if p.len() >= 3 => {
+            let owner: u8 = p[1].parse().unwrap_or(255);
+            if owner == local_id {
+                return;
+            }
+            if let Ok(id) = p[2].parse() {
                 let _ = ev.send(NetEvent::PeerRemove { id });
             }
+        }
+        Some("MOVE") if p.len() >= 5 => {
+            let owner: u8 = p[1].parse().unwrap_or(255);
+            if owner == local_id {
+                return;
+            }
+            let _ = ev.send(NetEvent::PeerMove {
+                id: p[2].parse().unwrap_or(0),
+                x: p[3].parse().unwrap_or(0.0),
+                y: p[4].parse().unwrap_or(0.0),
+            });
+        }
+        Some("ROT") if p.len() >= 4 => {
+            let owner: u8 = p[1].parse().unwrap_or(255);
+            if owner == local_id {
+                return;
+            }
+            let _ = ev.send(NetEvent::PeerRotate {
+                id: p[2].parse().unwrap_or(0),
+                facing: Facing::from_u8(p[3].parse().unwrap_or(0)),
+            });
+        }
+        Some("LINK") if p.len() >= 7 => {
+            let owner: u8 = p[1].parse().unwrap_or(255);
+            if owner == local_id {
+                return;
+            }
+            let power = p[2] == "P";
+            let _ = ev.send(NetEvent::PeerLink {
+                power,
+                from_node: p[3].parse().unwrap_or(0),
+                from_port: p[4].parse().unwrap_or(0),
+                to_node: p[5].parse().unwrap_or(0),
+                to_port: p[6].parse().unwrap_or(0),
+            });
         }
         Some("HELLO") if p.len() >= 3 => {
             let id = p[2].parse().unwrap_or(255);
             if id != local_id {
+                let _ = ev.send(NetEvent::PeerHello { id });
                 let _ = ev.send(NetEvent::Info(format!("Player {id} connected")));
             }
         }
@@ -156,6 +222,13 @@ fn parse_peer(raw: &str, local_id: u8, ev: &Sender<NetEvent>) {
             }
         }
         _ => {}
+    }
+}
+
+fn qos_for(cmd: &NetCommand) -> QoS {
+    match cmd {
+        NetCommand::SetCursor { .. } => QoS::AtMostOnce,
+        _ => QoS::AtLeastOnce,
     }
 }
 
@@ -180,9 +253,9 @@ fn run_mqtt(
     opts.set_keep_alive(Duration::from_secs(20));
     opts.set_clean_session(true);
 
-    let (client, mut connection) = Client::new(opts, 64);
+    let (client, mut connection) = Client::new(opts, 256);
     let t = topic(&code);
-    if let Err(e) = client.subscribe(&t, QoS::AtMostOnce) {
+    if let Err(e) = client.subscribe(&t, QoS::AtLeastOnce) {
         let _ = ev_tx.send(NetEvent::JoinFailed {
             reason: format!("subscribe failed: {e}"),
         });
@@ -210,17 +283,18 @@ fn run_mqtt(
         if is_host { "HOST" } else { "CLIENT" },
         &local_id.to_string(),
     ]);
-    let _ = client.publish(&t, QoS::AtMostOnce, false, hello.as_bytes());
+    let _ = client.publish(&t, QoS::AtLeastOnce, false, hello.as_bytes());
 
     let stop = Arc::new(AtomicBool::new(false));
     let stop2 = stop.clone();
     let topic_pub = t.clone();
     thread::spawn(move || {
         while let Ok(cmd) = cmd_rx.recv() {
-            let msg = match cmd {
+            let qos = qos_for(&cmd);
+            let msg = match &cmd {
                 NetCommand::Stop => {
                     let bye = encode(&["BYE", &local_id.to_string()]);
-                    let _ = client.publish(&topic_pub, QoS::AtMostOnce, false, bye.as_bytes());
+                    let _ = client.publish(&topic_pub, QoS::AtLeastOnce, false, bye.as_bytes());
                     stop2.store(true, Ordering::SeqCst);
                     break;
                 }
@@ -232,10 +306,11 @@ fn run_mqtt(
                 } => encode(&[
                     "CUR",
                     &local_id.to_string(),
-                    &format!("{x:.2}"),
-                    &format!("{y:.2}"),
-                    &kind_opt(selected),
+                    &format!("{x:.1}"),
+                    &format!("{y:.1}"),
+                    &kind_opt(*selected),
                     &facing.as_u8().to_string(),
+                    "1",
                 ]),
                 NetCommand::Place {
                     id,
@@ -245,16 +320,48 @@ fn run_mqtt(
                     facing,
                 } => encode(&[
                     "PLACE",
+                    &local_id.to_string(),
                     &id.to_string(),
                     &kind.as_u8().to_string(),
                     &format!("{x:.3}"),
                     &format!("{y:.3}"),
                     &facing.as_u8().to_string(),
+                    "1",
                 ]),
-                NetCommand::Remove { id } => encode(&["REM", &id.to_string()]),
+                NetCommand::Remove { id } => {
+                    encode(&["REM", &local_id.to_string(), &id.to_string()])
+                }
+                NetCommand::Move { id, x, y } => encode(&[
+                    "MOVE",
+                    &local_id.to_string(),
+                    &id.to_string(),
+                    &format!("{x:.3}"),
+                    &format!("{y:.3}"),
+                ]),
+                NetCommand::Rotate { id, facing } => encode(&[
+                    "ROT",
+                    &local_id.to_string(),
+                    &id.to_string(),
+                    &facing.as_u8().to_string(),
+                ]),
+                NetCommand::Link {
+                    power,
+                    from_node,
+                    from_port,
+                    to_node,
+                    to_port,
+                } => encode(&[
+                    "LINK",
+                    &local_id.to_string(),
+                    if *power { "P" } else { "B" },
+                    &from_node.to_string(),
+                    &from_port.to_string(),
+                    &to_node.to_string(),
+                    &to_port.to_string(),
+                ]),
             };
             if client
-                .publish(&topic_pub, QoS::AtMostOnce, false, msg.as_bytes())
+                .publish(&topic_pub, qos, false, msg.as_bytes())
                 .is_err()
             {
                 stop2.store(true, Ordering::SeqCst);
@@ -338,4 +445,3 @@ pub fn start_client(_ignored: &str, code: &str) -> NetHandle {
         join_addr: host,
     }
 }
-
