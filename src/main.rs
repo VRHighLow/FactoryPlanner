@@ -1,10 +1,12 @@
+#![cfg_attr(windows, windows_subsystem = "windows")]
+
 mod sim;
 mod net;
 
 use macroquad::prelude::*;
 use net::{NetCommand, NetEvent, NetHandle};
 use sim::*;
-use std::collections::{HashMap, VecDeque};
+use std::collections::HashMap;
 use std::time::Instant;
 
 const MIN_ZOOM: f32 = 0.35;
@@ -45,21 +47,15 @@ enum Screen {
     Game,
 }
 
-struct CursorSample {
-    x: f32,
-    y: f32,
-    t_ms: f32,
-    selected: Option<BuildingKind>,
-    facing: Facing,
-}
-
 struct PeerPresence {
     id: u8,
     x: f32,
     y: f32,
+    vx: f32,
+    vy: f32,
     selected: Option<BuildingKind>,
     facing: Facing,
-    samples: VecDeque<CursorSample>,
+    last_sample_t: f32,
 }
 
 struct Cam {
@@ -133,6 +129,8 @@ struct App {
     last_cursor_y: f32,
     cursor_clock: Instant,
     local_player_id: u8,
+    last_snap_send: Instant,
+    applying_snap: bool,
 }
 
 impl App {
@@ -158,6 +156,8 @@ impl App {
             last_cursor_y: f32::NAN,
             cursor_clock: Instant::now(),
             local_player_id: 0,
+            last_snap_send: Instant::now(),
+            applying_snap: false,
         }
     }
 
@@ -176,6 +176,9 @@ impl App {
         // Ask host for a fresh world snapshot (and tell peers we're in-world).
         if let Some(net) = self.net.as_ref() {
             let _ = net.tx.send(NetCommand::Announce);
+            if !net.is_host {
+                let _ = net.tx.send(NetCommand::WantSnap);
+            }
         }
     }
 
@@ -223,12 +226,13 @@ async fn main() {
             Screen::JoinLobby => screen_join_lobby(&mut app, mouse),
             Screen::Game => {
                 drain_net(&mut app);
+                maybe_host_snapshot(&mut app);
                 let (wx, wy) = app.cam.screen_to_world(mouse.0, mouse.1);
                 handle_hotkeys(&mut app, wx, wy);
                 handle_pan_zoom(&mut app, mouse);
                 handle_world_input(&mut app, mouse, wx, wy);
                 send_cursor_if_due(&mut app, wx, wy);
-                playback_peer_cursors(&mut app);
+                advance_peer_cursors(&mut app, dt);
                 app.world.tick(dt);
                 draw_game(&mut app, mouse, wx, wy);
             }
@@ -509,6 +513,12 @@ fn send_world_snapshot(app: &App) {
     let Some(net) = app.net.as_ref() else {
         return;
     };
+    let _ = net.tx.send(NetCommand::SnapBegin);
+    push_world_ops(app, net);
+    let _ = net.tx.send(NetCommand::SnapEnd);
+}
+
+fn push_world_ops(app: &App, net: &NetHandle) {
     let mut ids: Vec<u32> = app.world.nodes.keys().copied().collect();
     ids.sort_unstable();
     for id in ids {
@@ -519,6 +529,7 @@ fn send_world_snapshot(app: &App) {
                 x: n.x,
                 y: n.y,
                 facing: n.facing,
+                request: false,
             });
         }
     }
@@ -529,6 +540,7 @@ fn send_world_snapshot(app: &App) {
             from_port: l.from_port,
             to_node: l.to_node,
             to_port: l.to_port,
+            request: false,
         });
     }
     for l in &app.world.belts {
@@ -538,21 +550,38 @@ fn send_world_snapshot(app: &App) {
             from_port: l.from_port,
             to_node: l.to_node,
             to_port: l.to_port,
+            request: false,
         });
     }
 }
 
-fn playback_peer_cursors(app: &mut App) {
+fn maybe_host_snapshot(app: &mut App) {
+    let Some(net) = app.net.as_ref() else {
+        return;
+    };
+    if !net.is_host {
+        return;
+    }
+    // Soft reconcile (no wipe) so lossy brokers heal without flickering.
+    if app.last_snap_send.elapsed().as_millis() < 500 {
+        return;
+    }
+    app.last_snap_send = Instant::now();
+    push_world_ops(app, net);
+}
+
+fn advance_peer_cursors(app: &mut App, dt: f32) {
     for peer in app.peers.values_mut() {
-        // Zero buffer: always show the newest sample immediately.
-        while peer.samples.len() > 1 {
-            peer.samples.pop_front();
+        // Extrapolate with damping so motion stays smooth between sparse samples.
+        peer.x += peer.vx * dt;
+        peer.y += peer.vy * dt;
+        peer.vx *= 0.92;
+        peer.vy *= 0.92;
+        if peer.vx.abs() < 1.0 {
+            peer.vx = 0.0;
         }
-        if let Some(s) = peer.samples.back() {
-            peer.x = s.x;
-            peer.y = s.y;
-            peer.selected = s.selected;
-            peer.facing = s.facing;
+        if peer.vy.abs() < 1.0 {
+            peer.vy = 0.0;
         }
     }
 }
@@ -568,6 +597,8 @@ fn drain_net(app: &mut App) {
         }
         None => return,
     };
+
+    let is_host = app.net.as_ref().map(|n| n.is_host).unwrap_or(false);
 
     for ev in events {
         match ev {
@@ -591,12 +622,113 @@ fn drain_net(app: &mut App) {
                 app.join_status = format!("Failed: {reason}");
                 app.net = None;
             }
-            NetEvent::PeerHello { .. } => {
-                // Anyone who hears a HELLO while hosting dumps their world so the
-                // joiner catches up (buildings + wires).
-                if app.net.as_ref().map(|n| n.is_host).unwrap_or(false) {
+            NetEvent::PeerHello { .. } | NetEvent::WantSnap => {
+                if is_host {
                     send_world_snapshot(app);
+                    app.last_snap_send = Instant::now();
                     app.join_status = "Synced world to joiner".into();
+                }
+            }
+            NetEvent::PlaceRequest {
+                kind,
+                x,
+                y,
+                facing,
+            } => {
+                if is_host {
+                    if let Some(id) = app.world.place_node(kind, x, y, facing) {
+                        if let Some(net) = app.net.as_ref() {
+                            let _ = net.tx.send(NetCommand::Place {
+                                id,
+                                kind,
+                                x,
+                                y,
+                                facing,
+                                request: false,
+                            });
+                        }
+                        app.join_status = format!("Host placed {}", kind.short());
+                    }
+                }
+            }
+            NetEvent::RemoveRequest { id } => {
+                if is_host {
+                    app.world.remove_node(id);
+                    if let Some(net) = app.net.as_ref() {
+                        let _ = net.tx.send(NetCommand::Remove {
+                            id,
+                            request: false,
+                        });
+                    }
+                }
+            }
+            NetEvent::MoveRequest { id, x, y } => {
+                if is_host {
+                    app.world.force_move_node(id, x, y);
+                    if let Some(net) = app.net.as_ref() {
+                        let _ = net.tx.send(NetCommand::Move {
+                            id,
+                            x,
+                            y,
+                            request: false,
+                        });
+                    }
+                }
+            }
+            NetEvent::RotateRequest { id, facing } => {
+                if is_host {
+                    app.world.force_set_facing(id, facing);
+                    if let Some(net) = app.net.as_ref() {
+                        let _ = net.tx.send(NetCommand::Rotate {
+                            id,
+                            facing,
+                            request: false,
+                        });
+                    }
+                }
+            }
+            NetEvent::LinkRequest {
+                power,
+                from_node,
+                from_port,
+                to_node,
+                to_port,
+            } => {
+                if is_host {
+                    let ok = if power {
+                        app.world
+                            .connect_power((from_node, from_port), (to_node, to_port))
+                    } else {
+                        app.world
+                            .connect_belt((from_node, from_port), (to_node, to_port))
+                    };
+                    if ok {
+                        if let Some(net) = app.net.as_ref() {
+                            let _ = net.tx.send(NetCommand::Link {
+                                power,
+                                from_node,
+                                from_port,
+                                to_node,
+                                to_port,
+                                request: false,
+                            });
+                        }
+                    }
+                }
+            }
+            NetEvent::SnapBegin => {
+                if !is_host {
+                    app.world.nodes.clear();
+                    app.world.links.clear();
+                    app.world.belts.clear();
+                    app.applying_snap = true;
+                    app.join_status = "Receiving world…".into();
+                }
+            }
+            NetEvent::SnapEnd => {
+                if !is_host {
+                    app.applying_snap = false;
+                    app.join_status = "World synced".into();
                 }
             }
             NetEvent::PeerCursor {
@@ -607,40 +739,36 @@ fn drain_net(app: &mut App) {
                 facing,
                 t_ms,
             } => {
-                if id != app.local_player_id {
-                    let sample = CursorSample {
-                        x,
-                        y,
-                        t_ms,
-                        selected,
-                        facing,
-                    };
-                    if let Some(peer) = app.peers.get_mut(&id) {
-                        // Ignore out-of-order / duplicate timestamps.
-                        if peer
-                            .samples
-                            .back()
-                            .map(|s| t_ms + 0.01 < s.t_ms)
-                            .unwrap_or(false)
-                        {
-                            continue;
-                        }
-                        peer.samples.push_back(sample);
-                    } else {
-                        let mut samples = VecDeque::new();
-                        samples.push_back(sample);
-                        app.peers.insert(
-                            id,
-                            PeerPresence {
-                                id,
-                                x,
-                                y,
-                                selected,
-                                facing,
-                                samples,
-                            },
-                        );
+                if id == app.local_player_id {
+                    continue;
+                }
+                if let Some(peer) = app.peers.get_mut(&id) {
+                    if t_ms + 0.5 < peer.last_sample_t {
+                        continue;
                     }
+                    let dt = ((t_ms - peer.last_sample_t) / 1000.0).max(0.001);
+                    peer.vx = (x - peer.x) / dt;
+                    peer.vy = (y - peer.y) / dt;
+                    // Soft-correct toward sample (keeps path smooth).
+                    peer.x = peer.x * 0.25 + x * 0.75;
+                    peer.y = peer.y * 0.25 + y * 0.75;
+                    peer.selected = selected;
+                    peer.facing = facing;
+                    peer.last_sample_t = t_ms;
+                } else {
+                    app.peers.insert(
+                        id,
+                        PeerPresence {
+                            id,
+                            x,
+                            y,
+                            vx: 0.0,
+                            vy: 0.0,
+                            selected,
+                            facing,
+                            last_sample_t: t_ms,
+                        },
+                    );
                 }
             }
             NetEvent::PeerPlace {
@@ -651,7 +779,9 @@ fn drain_net(app: &mut App) {
                 facing,
             } => {
                 let _ = app.world.place_node_with_id(id, kind, x, y, facing);
-                app.join_status = format!("Peer placed {}", kind.short());
+                if !app.applying_snap {
+                    app.join_status = format!("Synced {}", kind.short());
+                }
             }
             NetEvent::PeerRemove { id } => {
                 app.world.remove_node(id);
@@ -745,6 +875,7 @@ fn handle_hotkeys(app: &mut App, wx: f32, wy: f32) {
                     let _ = net.tx.send(NetCommand::Rotate {
                         id,
                         facing: n.facing,
+                        request: !net.is_host,
                     });
                 }
             }
@@ -846,38 +977,82 @@ fn build_menu_rect() -> Rect {
 }
 
 fn place_building(app: &mut App, kind: BuildingKind, x: f32, y: f32, facing: Facing) {
-    if let Some(id) = app.world.place_node(kind, x, y, facing) {
-        if let Some(net) = app.net.as_ref() {
-            let _ = net.tx.send(NetCommand::Place {
-                id,
-                kind,
-                x,
-                y,
-                facing,
-            });
+    let is_host = app.net.as_ref().map(|n| n.is_host).unwrap_or(true);
+    if app.net.is_none() || is_host {
+        if let Some(id) = app.world.place_node(kind, x, y, facing) {
+            if let Some(net) = app.net.as_ref() {
+                let _ = net.tx.send(NetCommand::Place {
+                    id,
+                    kind,
+                    x,
+                    y,
+                    facing,
+                    request: false,
+                });
+            }
             app.join_status = format!("Placed #{id}");
         }
+    } else if let Some(net) = app.net.as_ref() {
+        let _ = net.tx.send(NetCommand::Place {
+            id: 0,
+            kind,
+            x,
+            y,
+            facing,
+            request: true,
+        });
+        app.join_status = format!("Placing {}…", kind.short());
     }
 }
 
 fn remove_building(app: &mut App, id: u32) {
-    app.world.remove_node(id);
-    if let Some(net) = app.net.as_ref() {
-        let _ = net.tx.send(NetCommand::Remove { id });
+    let is_host = app.net.as_ref().map(|n| n.is_host).unwrap_or(true);
+    if app.net.is_none() || is_host {
+        app.world.remove_node(id);
+        if let Some(net) = app.net.as_ref() {
+            let _ = net.tx.send(NetCommand::Remove {
+                id,
+                request: false,
+            });
+        }
+    } else if let Some(net) = app.net.as_ref() {
+        let _ = net.tx.send(NetCommand::Remove { id, request: true });
+        app.join_status = "Removing…".into();
     }
 }
 
 fn connect_ports_net(app: &mut App, from: (u32, usize), to: (u32, usize)) {
-    if let Some((power, a, b)) = app.world.connect_ports(from, to) {
-        if let Some(net) = app.net.as_ref() {
-            let _ = net.tx.send(NetCommand::Link {
-                power,
-                from_node: a.0,
-                from_port: a.1,
-                to_node: b.0,
-                to_port: b.1,
-            });
+    let is_host = app.net.as_ref().map(|n| n.is_host).unwrap_or(true);
+    if app.net.is_none() || is_host {
+        if let Some((power, a, b)) = app.world.connect_ports(from, to) {
+            if let Some(net) = app.net.as_ref() {
+                let _ = net.tx.send(NetCommand::Link {
+                    power,
+                    from_node: a.0,
+                    from_port: a.1,
+                    to_node: b.0,
+                    to_port: b.1,
+                    request: false,
+                });
+            }
         }
+    } else if let Some(net) = app.net.as_ref() {
+        // Guess power vs belt from port kinds locally for the request.
+        let power = app
+            .world
+            .nodes
+            .get(&from.0)
+            .and_then(|n| n.ports.get(from.1))
+            .map(|p| p.kind.is_energy())
+            .unwrap_or(false);
+        let _ = net.tx.send(NetCommand::Link {
+            power,
+            from_node: from.0,
+            from_port: from.1,
+            to_node: to.0,
+            to_port: to.1,
+            request: true,
+        });
     }
 }
 
@@ -944,6 +1119,7 @@ fn handle_world_input(app: &mut App, mouse: (f32, f32), wx: f32, wy: f32) {
                         id,
                         x: n.x,
                         y: n.y,
+                        request: !net.is_host,
                     });
                 }
             }
