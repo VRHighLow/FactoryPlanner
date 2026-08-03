@@ -11,12 +11,22 @@ use std::time::Duration;
 use crate::sim::{BuildingKind, Facing};
 
 pub const DEFAULT_PORT: u16 = 7788;
+pub const DISCOVER_PORT: u16 = 7789;
+
+#[derive(Clone, Debug)]
+pub struct LanGame {
+    pub name: String,
+    pub code: String,
+    pub addr: String, // host:port for TCP
+    pub last_seen_ms: u128,
+}
 
 #[derive(Clone, Debug)]
 pub enum NetEvent {
     HostReady { code: String, addr: String },
     Joined { player_id: u8 },
     JoinFailed { reason: String },
+    LanGames(Vec<LanGame>),
     PeerCursor {
         id: u8,
         x: f32,
@@ -147,6 +157,94 @@ fn broadcast(clients: &ClientList, msg: &str, except: Option<u8>) {
     });
 }
 
+fn now_ms() -> u128 {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_millis())
+        .unwrap_or(0)
+}
+
+fn advertise_loop(running: Arc<AtomicBool>, code: String, tcp_port: u16, host_name: String) {
+    thread::spawn(move || {
+        let sock = match std::net::UdpSocket::bind("0.0.0.0:0") {
+            Ok(s) => s,
+            Err(_) => return,
+        };
+        let _ = sock.set_broadcast(true);
+        let payload = format!("FP1|{code}|{tcp_port}|{host_name}");
+        while running.load(Ordering::SeqCst) {
+            let _ = sock.send_to(payload.as_bytes(), format!("255.255.255.255:{DISCOVER_PORT}"));
+            // Also try subnet broadcast via connected iface guess
+            let _ = sock.send_to(payload.as_bytes(), format!("10.0.0.255:{DISCOVER_PORT}"));
+            let _ = sock.send_to(payload.as_bytes(), format!("192.168.0.255:{DISCOVER_PORT}"));
+            let _ = sock.send_to(payload.as_bytes(), format!("192.168.1.255:{DISCOVER_PORT}"));
+            thread::sleep(Duration::from_millis(800));
+        }
+    });
+}
+
+/// Background LAN browser (Ark-style server list). Call once on Join screen.
+pub fn start_lan_browser() -> Receiver<NetEvent> {
+    let (tx, rx) = mpsc::channel();
+    thread::spawn(move || {
+        let sock = match std::net::UdpSocket::bind(("0.0.0.0", DISCOVER_PORT)) {
+            Ok(s) => s,
+            Err(e) => {
+                let _ = tx.send(NetEvent::JoinFailed {
+                    reason: format!("LAN browse bind failed: {e}"),
+                });
+                return;
+            }
+        };
+        let _ = sock.set_broadcast(true);
+        let _ = sock.set_read_timeout(Some(Duration::from_millis(400)));
+        let mut games: std::collections::HashMap<String, LanGame> = std::collections::HashMap::new();
+        let mut buf = [0u8; 512];
+        loop {
+            match sock.recv_from(&mut buf) {
+                Ok((n, from)) => {
+                    let msg = String::from_utf8_lossy(&buf[..n]);
+                    let p: Vec<&str> = msg.trim().split('|').collect();
+                    // FP1|code|port|name
+                    if p.len() >= 3 && p[0] == "FP1" {
+                        let code = p[1].to_string();
+                        let port: u16 = p[2].parse().unwrap_or(DEFAULT_PORT);
+                        let name = p
+                            .get(3)
+                            .map(|s| s.to_string())
+                            .filter(|s| !s.is_empty())
+                            .unwrap_or_else(|| "Factory".into());
+                        let addr = format!("{}:{}", from.ip(), port);
+                        games.insert(
+                            code.clone(),
+                            LanGame {
+                                name,
+                                code: code.clone(),
+                                addr,
+                                last_seen_ms: now_ms(),
+                            },
+                        );
+                    }
+                }
+                Err(ref e)
+                    if e.kind() == std::io::ErrorKind::WouldBlock
+                        || e.kind() == std::io::ErrorKind::TimedOut => {}
+                Err(_) => {}
+            }
+            let cutoff = now_ms().saturating_sub(3000);
+            games.retain(|_, g| g.last_seen_ms >= cutoff);
+            let mut list: Vec<LanGame> = games.values().cloned().collect();
+            list.sort_by(|a, b| a.name.cmp(&b.name).then(a.code.cmp(&b.code)));
+            if tx.send(NetEvent::LanGames(list)).is_err() {
+                break;
+            }
+            thread::sleep(Duration::from_millis(200));
+        }
+    });
+    rx
+}
+
 pub fn start_host() -> NetHandle {
     let code = gen_code();
     let ip = local_ip_guess();
@@ -157,6 +255,9 @@ pub fn start_host() -> NetHandle {
     let addr_c = addr.clone();
     let running = Arc::new(AtomicBool::new(true));
     let running2 = running.clone();
+    let host_name = format!("Host-{code}");
+
+    advertise_loop(running.clone(), code.clone(), DEFAULT_PORT, host_name);
 
     thread::spawn(move || {
         let listener = match TcpListener::bind(("0.0.0.0", DEFAULT_PORT)) {
@@ -173,11 +274,13 @@ pub fn start_host() -> NetHandle {
             addr: addr_c.clone(),
         });
         let _ = ev_tx.send(NetEvent::Joined { player_id: 0 });
+        let _ = ev_tx.send(NetEvent::Info(
+            "Broadcasting on LAN — friends can Join and click your game.".into(),
+        ));
 
         let clients: ClientList = Arc::new(Mutex::new(Vec::new()));
         let next_id = Arc::new(Mutex::new(1u8));
 
-        // Accept loop
         let clients_a = clients.clone();
         let ev_a = ev_tx.clone();
         let code_a = code_c.clone();
@@ -198,7 +301,10 @@ pub fn start_host() -> NetHandle {
                 }
                 let parts: Vec<&str> = hello.trim().split('|').collect();
                 let mut stream = reader.into_inner();
-                if parts.first() == Some(&"JOIN") && parts.get(1) == Some(&code_a.as_str()) {
+                // JOIN|code  OR  JOIN|*  (LAN click — trust discovery, still check code if provided)
+                let ok_code = parts.first() == Some(&"JOIN")
+                    && (parts.get(1) == Some(&code_a.as_str()) || parts.get(1) == Some(&"*"));
+                if ok_code {
                     let id = {
                         let mut n = next_a.lock().unwrap();
                         let id = *n;
@@ -210,7 +316,6 @@ pub fn start_host() -> NetHandle {
                         .is_ok()
                     {
                         let _ = ev_a.send(NetEvent::Info(format!("Player {id} joined")));
-                        // reader thread
                         let ev_r = ev_a.clone();
                         let clients_r = clients_a.clone();
                         let stream_r = stream.try_clone().unwrap();
@@ -234,7 +339,6 @@ pub fn start_host() -> NetHandle {
             }
         });
 
-        // Command loop (host local → clients)
         while running2.load(Ordering::SeqCst) {
             match cmd_rx.recv_timeout(Duration::from_millis(50)) {
                 Ok(NetCommand::Stop) => {
@@ -301,18 +405,36 @@ pub fn start_client(host_addr: &str, code: &str) -> NetHandle {
     let code_ret = code.clone();
 
     thread::spawn(move || {
-        let mut stream = match TcpStream::connect(&addr) {
-            Ok(s) => s,
+        use std::net::ToSocketAddrs;
+        let socket_addr = match addr.to_socket_addrs() {
+            Ok(mut it) => it.next(),
             Err(e) => {
                 let _ = ev_tx.send(NetEvent::JoinFailed {
-                    reason: format!("{e}"),
+                    reason: format!("bad address: {e}"),
+                });
+                return;
+            }
+        };
+        let Some(socket_addr) = socket_addr else {
+            let _ = ev_tx.send(NetEvent::JoinFailed {
+                reason: "could not resolve address".into(),
+            });
+            return;
+        };
+
+        let mut stream = match TcpStream::connect_timeout(&socket_addr, Duration::from_secs(4)) {
+            Ok(s) => s,
+            Err(_) => {
+                let _ = ev_tx.send(NetEvent::JoinFailed {
+                    reason: "Can't reach host (timeout). Same Wi‑Fi? Guest Wi‑Fi blocks this. Host must click Host Game first.".into(),
                 });
                 return;
             }
         };
         let _ = stream.set_nodelay(true);
+        let join_code = if code.is_empty() { "*" } else { code.as_str() };
         if stream
-            .write_all(line(&["JOIN", &code]).as_bytes())
+            .write_all(line(&["JOIN", join_code]).as_bytes())
             .is_err()
         {
             let _ = ev_tx.send(NetEvent::JoinFailed {
@@ -325,14 +447,14 @@ pub fn start_client(host_addr: &str, code: &str) -> NetHandle {
         let _ = stream.set_read_timeout(Some(Duration::from_secs(3)));
         if reader.read_line(&mut resp).is_err() {
             let _ = ev_tx.send(NetEvent::JoinFailed {
-                reason: "no reply".into(),
+                reason: "host did not reply".into(),
             });
             return;
         }
         let parts: Vec<&str> = resp.trim().split('|').collect();
         if parts.first() != Some(&"OK") {
             let _ = ev_tx.send(NetEvent::JoinFailed {
-                reason: "bad code".into(),
+                reason: "rejected by host (bad code)".into(),
             });
             return;
         }

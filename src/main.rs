@@ -2,9 +2,10 @@ mod sim;
 mod net;
 
 use macroquad::prelude::*;
-use net::{NetCommand, NetEvent, NetHandle, DEFAULT_PORT};
+use net::{LanGame, NetCommand, NetEvent, NetHandle, DEFAULT_PORT};
 use sim::*;
 use std::collections::HashMap;
+use std::sync::mpsc::Receiver;
 use std::time::Instant;
 
 const MIN_ZOOM: f32 = 0.35;
@@ -129,6 +130,8 @@ struct App {
     join_status: String,
     last_cursor_send: Instant,
     local_player_id: u8,
+    lan_games: Vec<LanGame>,
+    lan_browser: Option<Receiver<NetEvent>>,
 }
 
 impl App {
@@ -152,6 +155,8 @@ impl App {
             join_status: String::new(),
             last_cursor_send: Instant::now(),
             local_player_id: 0,
+            lan_games: Vec::new(),
+            lan_browser: None,
         }
     }
 
@@ -167,6 +172,12 @@ impl App {
             self.world.clear();
         }
         self.peers.clear();
+        self.stop_lan_browser();
+    }
+
+    fn stop_lan_browser(&mut self) {
+        self.lan_browser = None;
+        self.lan_games.clear();
     }
 
     fn stop_net(&mut self) {
@@ -327,26 +338,30 @@ fn screen_play(app: &mut App, mouse: (f32, f32)) {
 }
 
 fn screen_multiplayer(app: &mut App, mouse: (f32, f32)) {
-    draw_menu_backdrop("Multiplayer", "Host or join a session");
+    draw_menu_backdrop("Multiplayer", "Same Wi‑Fi — like a LAN server browser");
     let bx = 80.0;
     let mut by = 220.0;
     let bw = 280.0;
     let bh = 48.0;
     if button("Host Game", bx, by, bw, bh, mouse) {
         app.stop_net();
+        app.stop_lan_browser();
         app.world.clear();
         let handle = net::start_host();
         app.host_code = handle.code.clone();
         app.host_addr = handle.join_addr.clone();
         app.net = Some(handle);
         app.join_status.clear();
-        app.screen = Screen::HostLobby;
+        // Ark-style: go straight into the world while advertising on LAN.
+        app.enter_game();
     }
     by += 64.0;
     if button("Join Game", bx, by, bw, bh, mouse) {
         app.stop_net();
-        app.join_status.clear();
-        app.join_focus = Some(JoinField::Ip);
+        app.join_status = "Searching LAN…".into();
+        app.join_focus = None;
+        app.lan_games.clear();
+        app.lan_browser = Some(net::start_lan_browser());
         app.screen = Screen::JoinLobby;
     }
     by += 64.0;
@@ -356,140 +371,121 @@ fn screen_multiplayer(app: &mut App, mouse: (f32, f32)) {
 }
 
 fn screen_host_lobby(app: &mut App, mouse: (f32, f32)) {
+    // Kept for compatibility; Host now enters world immediately.
     drain_net(app);
-    draw_menu_backdrop("Host Lobby", "Share your code with friends");
+    draw_menu_backdrop("Host Lobby", "Share your session");
+    draw_text(&format!("Code: {}", app.host_code), 84.0, 220.0, 28.0, TEXT);
     draw_text(
-        &format!("Code: {}", app.host_code),
-        84.0,
-        220.0,
-        28.0,
-        TEXT,
-    );
-    draw_text(
-        &format!("Join address: {}", app.host_addr),
+        &format!("Address: {}", app.host_addr),
         84.0,
         260.0,
         22.0,
         TEXT_DIM,
     );
-    if !app.join_status.is_empty() {
-        draw_text(&app.join_status, 84.0, 300.0, 18.0, CYAN);
-    }
-    let bx = 80.0;
-    let by = 360.0;
-    let bw = 280.0;
-    let bh = 48.0;
-    if button("Enter World", bx, by, bw, bh, mouse) {
+    if button("Enter World", 80.0, 360.0, 280.0, 48.0, mouse) {
         app.enter_game();
     }
-    if button("Back", bx, by + 64.0, bw, bh, mouse) {
+    if button("Back", 80.0, 424.0, 280.0, 48.0, mouse) {
         app.stop_net();
         app.screen = Screen::Multiplayer;
     }
 }
 
-fn text_field(
-    label: &str,
-    value: &str,
-    x: f32,
-    y: f32,
-    w: f32,
-    h: f32,
-    focused: bool,
-    mouse: (f32, f32),
-) -> bool {
-    let hovered = mouse.0 >= x && mouse.0 <= x + w && mouse.1 >= y && mouse.1 <= y + h;
-    draw_text(label, x, y - 8.0, 16.0, TEXT_DIM);
-    draw_rectangle(x, y, w, h, Color::from_rgba(24, 28, 36, 255));
-    draw_rectangle_lines(
-        x,
-        y,
-        w,
-        h,
-        if focused { 2.0 } else { 1.2 },
-        if focused {
-            ACCENT
-        } else if hovered {
-            CYAN
-        } else {
-            NODE_BORDER
-        },
-    );
-    let display = if focused {
-        format!("{value}|")
-    } else {
-        value.to_string()
-    };
-    draw_text(&display, x + 12.0, y + h * 0.5 + 6.0, 20.0, TEXT);
-    hovered && is_mouse_button_pressed(MouseButton::Left)
-}
-
-fn handle_text_input(target: &mut String) {
-    while let Some(c) = get_char_pressed() {
-        if !c.is_control() && target.len() < 64 {
-            target.push(c);
-        }
-    }
-    if is_key_pressed(KeyCode::Backspace) {
-        target.pop();
-    }
-}
-
 fn screen_join_lobby(app: &mut App, mouse: (f32, f32)) {
     drain_net(app);
-    draw_menu_backdrop("Join Game", "Enter host address and code");
-
-    let fx = 80.0;
-    let fw = 420.0;
-    let fh = 44.0;
-    if text_field(
-        "IP / Address",
-        &app.join_ip,
-        fx,
-        220.0,
-        fw,
-        fh,
-        app.join_focus == Some(JoinField::Ip),
-        mouse,
-    ) {
-        app.join_focus = Some(JoinField::Ip);
-    }
-    if text_field(
-        "Code",
-        &app.join_code,
-        fx,
-        310.0,
-        fw,
-        fh,
-        app.join_focus == Some(JoinField::Code),
-        mouse,
-    ) {
-        app.join_focus = Some(JoinField::Code);
+    // Pull LAN browser updates
+    if let Some(rx) = app.lan_browser.as_ref() {
+        while let Ok(ev) = rx.try_recv() {
+            if let NetEvent::LanGames(list) = ev {
+                app.lan_games = list;
+                if app.lan_games.is_empty() {
+                    app.join_status = "Searching LAN for games…".into();
+                } else {
+                    app.join_status = format!("{} game(s) found — click one", app.lan_games.len());
+                }
+            }
+        }
     }
 
-    match app.join_focus {
-        Some(JoinField::Ip) => handle_text_input(&mut app.join_ip),
-        Some(JoinField::Code) => handle_text_input(&mut app.join_code),
-        None => {}
+    draw_menu_backdrop("Join Game", "Click a LAN game — no IP typing");
+
+    let list_x = 80.0;
+    let list_y = 200.0;
+    let list_w = 520.0;
+    let row_h = 52.0;
+
+    draw_rectangle(
+        list_x,
+        list_y,
+        list_w,
+        280.0,
+        Color::from_rgba(16, 18, 24, 230),
+    );
+    draw_rectangle_lines(list_x, list_y, list_w, 280.0, 1.2, NODE_BORDER);
+
+    if app.lan_games.is_empty() {
+        draw_text(
+            "No games yet. Host must open Multiplayer → Host Game",
+            list_x + 16.0,
+            list_y + 40.0,
+            18.0,
+            TEXT_DIM,
+        );
+        draw_text(
+            "Both PCs need the same Wi‑Fi (not Guest / client isolation).",
+            list_x + 16.0,
+            list_y + 68.0,
+            16.0,
+            TEXT_DIM,
+        );
+    } else {
+        let mut join_target: Option<(String, String)> = None;
+        for (i, g) in app.lan_games.iter().enumerate() {
+            let y = list_y + 12.0 + i as f32 * (row_h + 8.0);
+            if y + row_h > list_y + 270.0 {
+                break;
+            }
+            let hovered = mouse.0 >= list_x + 10.0
+                && mouse.0 <= list_x + list_w - 10.0
+                && mouse.1 >= y
+                && mouse.1 <= y + row_h;
+            draw_rectangle(
+                list_x + 10.0,
+                y,
+                list_w - 20.0,
+                row_h,
+                if hovered {
+                    Color::from_rgba(48, 58, 72, 255)
+                } else {
+                    Color::from_rgba(28, 32, 40, 255)
+                },
+            );
+            draw_text(&g.name, list_x + 24.0, y + 22.0, 20.0, TEXT);
+            draw_text(&g.addr, list_x + 24.0, y + 42.0, 14.0, TEXT_DIM);
+            draw_text("JOIN", list_x + list_w - 90.0, y + 32.0, 18.0, CYAN);
+            if hovered && is_mouse_button_pressed(MouseButton::Left) {
+                join_target = Some((g.addr.clone(), g.code.clone()));
+            }
+        }
+        if let Some((addr, code)) = join_target {
+            app.stop_lan_browser();
+            app.stop_net();
+            app.world.clear();
+            app.join_ip = addr.clone();
+            app.join_code = code.clone();
+            app.join_status = format!("Joining {addr}…");
+            let handle = net::start_client(&addr, &code);
+            app.net = Some(handle);
+        }
     }
 
     if !app.join_status.is_empty() {
-        draw_text(&app.join_status, fx, 380.0, 18.0, ACCENT);
+        draw_text(&app.join_status, list_x, list_y + 300.0, 18.0, ACCENT);
     }
 
-    let bx = 80.0;
-    let by = 420.0;
-    let bw = 280.0;
-    let bh = 48.0;
-    if button("Connect", bx, by, bw, bh, mouse) {
+    if button("Back", 80.0, list_y + 340.0, 200.0, 44.0, mouse) {
         app.stop_net();
-        app.world.clear();
-        app.join_status = "Connecting…".into();
-        let handle = net::start_client(&app.join_ip, &app.join_code);
-        app.net = Some(handle);
-    }
-    if button("Back", bx, by + 64.0, bw, bh, mouse) {
-        app.stop_net();
+        app.stop_lan_browser();
         app.join_focus = None;
         app.screen = Screen::Multiplayer;
     }
@@ -524,6 +520,7 @@ fn drain_net(app: &mut App) {
                 app.join_status = format!("Failed: {reason}");
                 app.net = None;
             }
+            NetEvent::LanGames(_) => {}
             NetEvent::PeerCursor {
                 id,
                 x,
