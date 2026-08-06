@@ -75,6 +75,11 @@ pub struct Art {
     pub icon_hammer: Option<Texture2D>,
     pub icon_map: Option<Texture2D>,
     pub icon_tech: Option<Texture2D>,
+    /// Hunter "Eye" enemy layers (`assets/enemies/eye/`).
+    pub eye_base: Option<Texture2D>,
+    pub eye_strands: Option<Texture2D>,
+    pub eye_gun1: Option<Texture2D>,
+    pub eye_gun2: Option<Texture2D>,
 }
 
 impl Art {
@@ -127,6 +132,14 @@ impl Art {
             );
         }
 
+        let eye_base = load_tex("assets/enemies/eye/EyeEnemyBase.webp");
+        let eye_strands = load_tex("assets/enemies/eye/EyeEnemyStrands.webp");
+        let eye_gun1 = load_tex("assets/enemies/eye/EyeEnemyGun1.webp");
+        let eye_gun2 = load_tex("assets/enemies/eye/EyeEnemyGun2.webp");
+        if eye_base.is_none() || eye_strands.is_none() || eye_gun1.is_none() || eye_gun2.is_none() {
+            eprintln!("art: missing Eye enemy layers — expected assets/enemies/eye/");
+        }
+
         for t in &cracks {
             t.set_filter(FilterMode::Linear);
         }
@@ -135,6 +148,12 @@ impl Art {
         }
         for t in [&icon_hammer, &icon_map, &icon_tech].into_iter().flatten() {
             t.set_filter(FilterMode::Linear);
+        }
+        for t in [&eye_base, &eye_strands, &eye_gun1, &eye_gun2]
+            .into_iter()
+            .flatten()
+        {
+            t.set_filter(FilterMode::Nearest);
         }
         Self {
             turret_base,
@@ -146,6 +165,10 @@ impl Art {
             icon_hammer,
             icon_map,
             icon_tech,
+            eye_base,
+            eye_strands,
+            eye_gun1,
+            eye_gun2,
         }
     }
 }

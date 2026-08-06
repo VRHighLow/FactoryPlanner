@@ -52,7 +52,7 @@ const MAX_SIM_STEPS: u32 = 12;
 /// Max sim time debt kept when the step budget is exhausted (soft slowdown).
 const MAX_SIM_DEBT: f32 = 0.25;
 
-const BG: Color = Color::from_rgba(28, 30, 28, 255);
+const BG: Color = Color::from_rgba(14, 16, 18, 255);
 const GRID_MINOR_C: Color = Color::from_rgba(62, 70, 58, 55);
 const NODE_BORDER: Color = Color::from_rgba(120, 140, 160, 180);
 const CYAN: Color = Color::from_rgba(72, 220, 205, 255);
@@ -91,7 +91,8 @@ void main() {
 }
 "#;
 
-/// World-space point lights: darkens unlit floor, leaves lit areas clear (real 2D lighting).
+/// Atmospheric top-down lighting — smooth falloff, then snapped to a fine
+/// world pixel grid (cell-center sample) so it reads pixel without janky bands.
 const LIGHT_FRAGMENT: &str = r#"#version 100
 precision highp float;
 
@@ -102,41 +103,75 @@ uniform vec2 ScreenSize;
 uniform vec2 CamPos;
 uniform float CamZoom;
 uniform float Ambient;
+uniform float PixelSize;
 uniform vec4 Lights[32];
+uniform vec4 Flashes[4];
+
+float dither4(vec2 p) {
+    vec2 i = mod(floor(p), 2.0);
+    return (i.x + i.y * 2.0) * (1.0 / 5.0) - 0.3;
+}
 
 void main() {
     vec2 screen = vec2(gl_FragCoord.x, ScreenSize.y - gl_FragCoord.y);
-    vec2 world = (screen - 0.5 * ScreenSize) / max(CamZoom, 0.001) + CamPos;
+    vec2 world_raw = (screen - 0.5 * ScreenSize) / max(CamZoom, 0.001) + CamPos;
+
+    // Snap sample point to a fine *world* mosaic (stable while panning).
+    // Lighting math stays smooth; only the sample lattice is pixelated.
+    float wpix = max(PixelSize, 2.0);
+    vec2 world = floor(world_raw / wpix) * wpix + wpix * 0.5;
 
     float illum = Ambient;
-    vec3 warm = vec3(0.0);
+    float warm = 0.0;
+    float bolt = 0.0;
     for (int i = 0; i < 32; i++) {
         float inten = Lights[i].w;
         if (inten > 0.01) {
-            vec2 d = world - Lights[i].xy;
+            vec2 lpos = Lights[i].xy;
             float rad = max(Lights[i].z, 8.0);
-            float nd = length(d) / rad;
-            // Smooth physical-ish falloff: bright core, soft edge, no hard disc.
-            float atten = 1.0 / (1.0 + nd * nd * 2.75);
-            atten *= 1.0 - smoothstep(0.72, 1.0, nd);
-            illum += inten * atten;
-            warm += vec3(1.0, 0.84, 0.62) * (inten * atten);
+            float nd = length(world - lpos) / rad;
+            float atten = 1.0 / (1.0 + nd * nd * 2.4);
+            atten *= 1.0 - smoothstep(0.62, 1.0, nd);
+            float core = exp(-nd * nd * 4.5) * inten * 0.4;
+            float contrib = inten * atten + core;
+            illum += contrib;
+            warm += contrib;
         }
     }
+    // Storm lightning — cool white burst that peels the gloom veil.
+    for (int i = 0; i < 4; i++) {
+        float inten = Flashes[i].z;
+        if (inten > 0.01) {
+            vec2 d = world - Flashes[i].xy;
+            float rad = max(Flashes[i].w, 80.0);
+            float fall = exp(-dot(d, d) / (rad * rad));
+            bolt = max(bolt, inten * fall);
+        }
+    }
+    illum += bolt * 1.35;
     illum = clamp(illum, 0.0, 1.45);
-    warm = clamp(warm, 0.0, 1.0);
+    warm = clamp(warm * 0.85, 0.0, 1.0);
+    bolt = clamp(bolt, 0.0, 1.5);
 
-    // How much to darken the scene (0 = fully lit / transparent).
-    float shade = 1.0 - smoothstep(0.22, 1.05, illum);
-    shade = clamp(shade, 0.0, 1.0);
+    float lit01 = smoothstep(0.05, 0.78, illum);
+    lit01 = lit01 * lit01 * (3.0 - 2.0 * lit01);
+    // Posterize after the smooth curve — pixel steps, accurate shape.
+    lit01 = floor(lit01 * 10.0 + dither4(world / wpix) * 0.35 + 0.5) / 10.0;
+    lit01 = clamp(lit01, 0.0, 1.0);
 
-    // Cool shadow tint in unlit areas; tiny warm lift where lights actually reach.
-    vec3 shadow = vec3(0.03, 0.04, 0.06);
-    vec3 rgb = mix(shadow, warm * 0.18, clamp(illum - Ambient, 0.0, 1.0) * 0.45);
-    float alpha = shade * 0.52;
-    // Do NOT multiply by vertex `color` unless it's been /255'd in the vertex shader.
-    // Multiplying by raw Byte4 (0..255) blows this fullscreen pass to opaque white.
-    gl_FragColor = vec4(rgb, alpha);
+    float veil_a = mix(0.91, 0.34, lit01);
+    // Strikes punch the veil open harder than steady lamps.
+    veil_a *= 1.0 - clamp(bolt * 0.72, 0.0, 0.75);
+    veil_a = clamp(veil_a, 0.12, 0.94);
+
+    vec3 gloom = vec3(0.03, 0.04, 0.06);
+    vec3 bilge = vec3(0.05, 0.035, 0.07);
+    vec3 lamp = vec3(0.14, 0.09, 0.04);
+    vec3 strike = vec3(0.55, 0.65, 1.0);
+    vec3 veil = mix(mix(gloom, bilge, 0.45), lamp, warm * lit01 * 0.75);
+    veil = mix(veil, strike, clamp(bolt * 0.55, 0.0, 0.85));
+
+    gl_FragColor = vec4(veil, veil_a);
 }
 "#;
 
@@ -211,12 +246,12 @@ void main() {
     float cloud = fbm(world * 0.0028 + vec2(t * 0.55, -t * 0.22));
     float shadow = smoothstep(0.28, 0.72, cloud);
 
-    // Palette: dark wet earth under perpetual overcast (readable, not crushed black).
-    vec3 dry = vec3(0.22, 0.20, 0.17);      // ash clay
-    vec3 damp = vec3(0.14, 0.15, 0.13);      // wet soil
-    vec3 mudc = vec3(0.10, 0.11, 0.10);     // puddle mud
-    vec3 grassc = vec3(0.21, 0.22, 0.155);  // lighter dead-grass patches
-    vec3 storm = vec3(0.08, 0.09, 0.11);     // under deep fog
+    // Palette: dark wet earth — readable under the lighting veil.
+    vec3 dry = vec3(0.20, 0.18, 0.155);     // ash clay
+    vec3 damp = vec3(0.12, 0.125, 0.11);     // wet soil
+    vec3 mudc = vec3(0.075, 0.085, 0.08);    // puddle mud
+    vec3 grassc = vec3(0.17, 0.18, 0.13);    // dead-grass patches
+    vec3 storm = vec3(0.055, 0.065, 0.08);   // under deep fog
 
     // Light patches = grass ground (high soil, low mud). Dark = wet mud.
     float grass = smoothstep(0.42, 0.74, soil) * (1.0 - smoothstep(0.55, 0.85, mud));
@@ -795,6 +830,111 @@ fn create_gas_material() -> Option<Material> {
     .ok()
 }
 
+const EYE_STRAND_FRAGMENT: &str = r#"#version 100
+precision mediump float;
+varying vec2 uv;
+varying vec4 color;
+uniform sampler2D Texture;
+uniform float Time;
+uniform float Seed;
+void main() {
+    float tip = smoothstep(0.15, 0.95, uv.y);
+    float w = sin(Time * 4.5 + uv.y * 28.0 + Seed * 6.2831) * 0.012 * tip
+            + sin(Time * 7.0 + uv.y * 44.0 + Seed * 2.1) * 0.005 * tip;
+    vec2 sample_uv = vec2(uv.x + w, uv.y);
+    vec4 tex = texture2D(Texture, sample_uv);
+    gl_FragColor = tex * color;
+}
+"#;
+
+fn create_eye_strand_material() -> Option<Material> {
+    let pipeline_params = PipelineParams {
+        color_blend: Some(BlendState::new(
+            Equation::Add,
+            BlendFactor::Value(BlendValue::SourceAlpha),
+            BlendFactor::OneMinusValue(BlendValue::SourceAlpha),
+        )),
+        ..Default::default()
+    };
+    load_material(
+        ShaderSource::Glsl {
+            vertex: STORM_VERTEX,
+            fragment: EYE_STRAND_FRAGMENT,
+        },
+        MaterialParams {
+            uniforms: vec![
+                UniformDesc::new("Time", UniformType::Float1),
+                UniformDesc::new("Seed", UniformType::Float1),
+            ],
+            pipeline_params,
+            ..Default::default()
+        },
+    )
+    .map_err(|e| {
+        eprintln!("eye strand shader unavailable: {e:?}");
+        e
+    })
+    .ok()
+}
+
+/// Spherical lighting for the Eye body — soft key light + rim so the flat disc reads as a ball.
+const EYE_BODY_FRAGMENT: &str = r#"#version 100
+precision mediump float;
+varying vec2 uv;
+varying vec4 color;
+uniform sampler2D Texture;
+uniform vec2 LightDir;
+void main() {
+    vec4 tex = texture2D(Texture, uv);
+    if (tex.a < 0.01) {
+        gl_FragColor = vec4(0.0);
+        return;
+    }
+    // Sphere from UV: center of the eyeball disc in the sprite.
+    vec2 p = (uv - vec2(0.5, 0.52)) * vec2(2.15, 2.35);
+    float r2 = dot(p, p);
+    float inside = 1.0 - smoothstep(0.92, 1.08, r2);
+    float z = sqrt(max(0.0, 1.0 - min(r2, 1.0)));
+    vec3 n = normalize(vec3(p.x, -p.y, z));
+    vec3 l = normalize(vec3(LightDir.x, LightDir.y, 0.55));
+    float ndl = max(0.0, dot(n, l));
+    float wrap = ndl * 0.65 + 0.35;
+    float rim = pow(1.0 - z, 2.2) * inside;
+    float shade = mix(0.52, 1.18, wrap) - rim * 0.28;
+    // Soft specular toward the key light.
+    float spec = pow(ndl, 18.0) * inside * 0.22;
+    vec3 lit = tex.rgb * shade + vec3(spec);
+    gl_FragColor = vec4(lit, tex.a) * color;
+}
+"#;
+
+fn create_eye_body_material() -> Option<Material> {
+    let pipeline_params = PipelineParams {
+        color_blend: Some(BlendState::new(
+            Equation::Add,
+            BlendFactor::Value(BlendValue::SourceAlpha),
+            BlendFactor::OneMinusValue(BlendValue::SourceAlpha),
+        )),
+        ..Default::default()
+    };
+    load_material(
+        ShaderSource::Glsl {
+            vertex: STORM_VERTEX,
+            fragment: EYE_BODY_FRAGMENT,
+        },
+        MaterialParams {
+            uniforms: vec![UniformDesc::new("LightDir", UniformType::Float2)],
+            pipeline_params,
+            ..Default::default()
+        },
+    )
+    .map_err(|e| {
+        eprintln!("eye body shader unavailable: {e:?}");
+        e
+    })
+    .ok()
+}
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Screen {
     Main,
@@ -1299,6 +1439,7 @@ fn create_storm_material() -> Option<Material> {
 }
 
 fn create_lighting_material() -> Option<Material> {
+    // Standard alpha blend: scene is veiled so bright sprites dim with light level.
     let pipeline_params = PipelineParams {
         color_blend: Some(BlendState::new(
             Equation::Add,
@@ -1318,7 +1459,12 @@ fn create_lighting_material() -> Option<Material> {
                 UniformDesc::new("CamPos", UniformType::Float2),
                 UniformDesc::new("CamZoom", UniformType::Float1),
                 UniformDesc::new("Ambient", UniformType::Float1),
+                UniformDesc::new("PixelSize", UniformType::Float1),
                 UniformDesc::array(UniformDesc::new("Lights", UniformType::Float4), LIGHT_MAX),
+                UniformDesc::array(
+                    UniformDesc::new("Flashes", UniformType::Float4),
+                    STORM_MAX_FLASHES,
+                ),
             ],
             pipeline_params,
             ..Default::default()
@@ -1673,6 +1819,29 @@ struct LightningFx {
     width: f32,
 }
 
+/// Pixel blood from Eye/Hunter deaths — settles then fades over BLOOD_LINGER.
+struct BloodPixel {
+    x: f32,
+    y: f32,
+    vx: f32,
+    vy: f32,
+    size: f32,
+    /// Ellipse aspect (1 = round; >1 elongated along `rot`).
+    stretch: f32,
+    /// Draw rotation (radians).
+    rot: f32,
+    /// 0 = droplet, 1 = chunk, 2 = mist fleck, 3 = ground puddle core.
+    kind: u8,
+    /// Time left while airborne before pinning to ground.
+    fly: f32,
+    /// Time left after landing (counts down from BLOOD_LINGER).
+    life: f32,
+    settled: bool,
+}
+
+const BLOOD_LINGER: f32 = 10.0;
+const BLOOD_FLY: f32 = 0.18;
+
 struct App {
     screen: Screen,
     /// Where Settings returns to when closed.
@@ -1691,6 +1860,10 @@ struct App {
     cannon_fx: Option<Material>,
     /// Rising gas plumes from vents (storm-quality mosaic).
     gas_fx: Option<Material>,
+    /// Eye strand wiggle (textured sprite material).
+    eye_strands_fx: Option<Material>,
+    /// Eye body spherical lighting.
+    eye_body_fx: Option<Material>,
     settings: Settings,
     pause_open: bool,
     autosave_timer: f32,
@@ -1740,6 +1913,8 @@ struct App {
     peer_inventories: HashMap<u8, Inventory>,
     /// Survival (gated) vs Creative (free / unlocked).
     game_mode: GameMode,
+    /// Session-only Eye death blood pixels.
+    blood_pixels: Vec<BloodPixel>,
 }
 
 impl App {
@@ -1762,6 +1937,8 @@ impl App {
             ground: None,
             cannon_fx: None,
             gas_fx: None,
+            eye_strands_fx: None,
+            eye_body_fx: None,
             settings,
             pause_open: false,
             autosave_timer: 0.0,
@@ -1800,6 +1977,7 @@ impl App {
             inventory: Inventory::starter(),
             peer_inventories: HashMap::new(),
             game_mode: GameMode::Survival,
+            blood_pixels: Vec::new(),
         }
     }
 
@@ -2147,6 +2325,8 @@ async fn main() {
     app.ground = create_ground_material();
     app.cannon_fx = create_cannon_material();
     app.gas_fx = create_gas_material();
+    app.eye_strands_fx = create_eye_strand_material();
+    app.eye_body_fx = create_eye_body_material();
     if app.storm.material.is_none() {
         app.status_toast = "GPU fog shader unavailable — using lightweight fallback".into();
     }
@@ -2237,6 +2417,9 @@ async fn main() {
                         let zones = app.storm.clear_zones(&app.world);
                         app.world.tick(FIXED_DT, &zones);
                         let report = app.world.combat_step(FIXED_DT, &zones);
+                        for &(x, y) in &report.hunter_deaths {
+                            spawn_eye_blood(&mut app.blood_pixels, x, y);
+                        }
                         if let Some(tid) = app.world.tech_completed.take() {
                             app.status_toast = format!("Researched: {tid}");
                         } else if app.world.era1_complete
@@ -2331,6 +2514,7 @@ async fn main() {
                 let (wx, wy) = app.cam.screen_to_world(mouse.0, mouse.1);
                 // Lightning bolts animate at render rate.
                 tick_lightning_fx(&mut app, frame_dt);
+                tick_blood_pixels(&mut app.blood_pixels, frame_dt);
                 draw_game(&mut app, mouse, wx, wy);
                 if app.pause_open {
                     draw_and_handle_pause_menu(&mut app, mouse);
@@ -4815,7 +4999,8 @@ fn draw_game(app: &mut App, mouse: (f32, f32), wx: f32, wy: f32) {
     draw_coverage_rings(&app.world, &app.cam, &app.ui);
     draw_belt_tiles(&app.world, &app.cam, &app.ui, &app.art, wx, wy);
     draw_power_links(&app.world, &app.cam, &app.ui, wx, wy);
-    draw_nests_and_raiders(&app.world, &app.cam, &app.storm, &zones);
+    draw_nests_and_raiders(app, &zones);
+    draw_blood_pixels(&app.blood_pixels, &app.cam);
     draw_storm_blots(&app.world, &app.cam);
     let hover_id = if point_in_hud_chrome(mouse.0, mouse.1) || app.ui.build_open {
         None
@@ -4829,8 +5014,6 @@ fn draw_game(app: &mut App, mouse: (f32, f32), wx: f32, wy: f32) {
         })
     };
     draw_nodes(&app.world, &app.cam, &app.ui, hover_id, &app.art);
-    draw_cannon_fx(app);
-    draw_combat_shots(&app.world, &app.cam, app.cannon_fx.is_some());
     player::draw_player(
         &app.player,
         app.cam.x,
@@ -4852,11 +5035,14 @@ fn draw_game(app: &mut App, mouse: (f32, f32), wx: f32, wy: f32) {
     );
     draw_peer_cursors(app);
     draw_storm(&app.storm, &zones, &app.cam);
-    draw_lightning_fx(app);
-    // After storm — darkening under fog made the nebula blow out to white.
-    draw_world_lighting(app);
-    // Gas plumes above lighting so they stay readable in the dark clear pocket.
     draw_gas_vents(app, &zones);
+    // Last world pass: pull unlit sprites/blood/ground to the same gloom.
+    // HUD / UI drawn after this stays fully lit.
+    draw_world_lighting(app);
+    // Emissive FX sit above the veil so lasers / bolts still read as light sources.
+    draw_cannon_fx(app);
+    draw_combat_shots(&app.world, &app.cam, app.cannon_fx.is_some());
+    draw_lightning_fx(app);
     // Deferred GL readback — only when saving, never on a timer.
     if app.pending_preview_capture {
         // 1px low-alpha grid vanishes under ambient darken + thumbnail resize;
@@ -5358,35 +5544,38 @@ fn draw_world_lighting(app: &App) {
         i += 1;
     };
 
+    // Small personal lamp — orientation puddle, not a floodlight.
+    push(app.player.x, app.player.y, 95.0, 0.14);
+
     for n in app.world.nodes.values() {
         let (cx, cy) = n.center();
         match n.kind {
             BuildingKind::PowerPole if n.working => {
-                push(cx, cy, POLE_RADIUS * 1.05, 0.95);
+                push(cx, cy, POLE_RADIUS * 1.15, 0.95);
             }
             BuildingKind::Solar if n.working => {
-                push(cx, cy, 90.0, 0.35);
+                push(cx, cy, 100.0, 0.42);
             }
             BuildingKind::OreNode | BuildingKind::Smelter | BuildingKind::Assembler if n.working => {
-                push(cx, cy, 70.0, 0.28);
+                push(cx, cy, 80.0, 0.38);
             }
             BuildingKind::Turret if n.powered => {
                 let (ux, uy) = (n.aim_angle.sin(), -n.aim_angle.cos());
                 let mx = cx + ux * 36.0;
                 let my = cy + uy * 36.0;
-                push(cx, cy, 55.0, 0.18);
+                push(cx, cy, 64.0, 0.28);
                 if n.charge > 0.05 {
-                    push(mx, my, 18.0 + n.charge * 22.0, 0.2 + n.charge * 0.55);
+                    push(mx, my, 20.0 + n.charge * 24.0, 0.26 + n.charge * 0.5);
                 } else if n.cooldown > 0.0 {
                     let t = (n.cooldown / TURRET_FIRE_INTERVAL).clamp(0.0, 1.0);
-                    push(mx, my, 16.0, 0.15 * t);
+                    push(mx, my, 16.0, 0.18 * t);
                 }
             }
             BuildingKind::Totem if n.powered => {
-                push(cx, cy, 110.0, 0.30);
+                push(cx, cy, 140.0, 0.44);
             }
             BuildingKind::PowerWire if n.powered => {
-                push(cx, cy, 36.0, 0.12);
+                push(cx, cy, 40.0, 0.14);
             }
             _ => {}
         }
@@ -5395,12 +5584,22 @@ fn draw_world_lighting(app: &App) {
     mat.set_uniform("ScreenSize", vec2(screen_width(), screen_height()));
     mat.set_uniform("CamPos", vec2(app.cam.x, app.cam.y));
     mat.set_uniform("CamZoom", app.cam.zoom);
-    // Float1 must be f32 (4 bytes). f64 literals silently fail and leave Ambient=0.
-    let ambient: f32 = 0.52;
+    // Fine world mosaic (~half a tile) — pixel cells, smooth falloff at each center.
+    mat.set_uniform("PixelSize", 4.0_f32);
+    // Readable gloom — factory pockets of amber, not a void flashlight.
+    let ambient: f32 = 0.12;
     mat.set_uniform("Ambient", ambient);
     mat.set_uniform_array("Lights", &lights);
+    let mut flashes = [vec4(0.0, 0.0, 0.0, 0.0); STORM_MAX_FLASHES];
+    for (i, &(x, y, inten, rad)) in app.storm.flashes.iter().enumerate() {
+        if i >= STORM_MAX_FLASHES {
+            break;
+        }
+        // Storm stores (x,y,intensity,radius) — same layout the fog shader expects.
+        flashes[i] = vec4(x, y, inten, rad);
+    }
+    mat.set_uniform_array("Flashes", &flashes);
     gl_use_material(mat);
-    // Vertex color is unused by the lighting shader; keep alpha=1 for the quad itself.
     draw_rectangle(
         0.0,
         0.0,
@@ -7268,7 +7467,10 @@ fn draw_gas_vents(app: &App, zones: &[(f32, f32, f32)]) {
     gl_use_default_material();
 }
 
-fn draw_nests_and_raiders(world: &World, cam: &Cam, storm: &Storm, zones: &[(f32, f32, f32)]) {
+fn draw_nests_and_raiders(app: &App, zones: &[(f32, f32, f32)]) {
+    let world = &app.world;
+    let cam = &app.cam;
+    let storm = &app.storm;
     for nest in &world.nests {
         // Hidden in the storm until a clear zone reveals them.
         if !storm.in_clear(nest.x, nest.y, zones) {
@@ -7341,11 +7543,17 @@ fn draw_nests_and_raiders(world: &World, cam: &Cam, storm: &Storm, zones: &[(f32
     for raider in &world.raiders {
         let scale = if raider.role == RaiderRole::Fogcaller {
             1.25
+        } else if raider.role == RaiderRole::Hunter {
+            2.2 // Eye sprite is ~2× circle footprint
         } else {
             1.0
         };
         let wr = RAIDER_RADIUS * scale;
         if !cam.world_circle_visible(raider.x, raider.y, wr, 24.0) {
+            continue;
+        }
+        if raider.role == RaiderRole::Hunter {
+            draw_eye_raider(app, raider);
             continue;
         }
         let (sx, sy) = cam.world_to_screen(raider.x, raider.y);
@@ -7382,7 +7590,386 @@ fn draw_nests_and_raiders(world: &World, cam: &Cam, storm: &Storm, zones: &[(f32
         draw_circle_lines(sx, sy, r, 2.0, with_alpha(rim, 0.45));
         draw_circle_lines(sx, sy, r, 1.1, rim);
         draw_circle(sx, sy - r * 0.55, r * 0.35, rim);
-        draw_circle(sx - r * 0.08, sy - r * 0.62, r * 0.12, Color::from_rgba(255, 255, 255, 90));
+        draw_circle(
+            sx - r * 0.08,
+            sy - r * 0.62,
+            r * 0.12,
+            Color::from_rgba(255, 255, 255, 90),
+        );
+    }
+}
+
+fn draw_eye_raider(app: &App, raider: &Raider) {
+    let cam = &app.cam;
+    let (sx, sy) = cam.world_to_screen(raider.x, raider.y);
+    let z = cam.zoom;
+    let body = RAIDER_RADIUS * 4.7 * z;
+    // Sprite faces +Y in art; aim_angle is atan2(dy,dx) with 0 = +X.
+    let rot = raider.aim_angle + std::f32::consts::FRAC_PI_2;
+    let (cs, sn) = (rot.cos(), rot.sin());
+    let recoil01 = (raider.recoil_t / EYE_RECOIL_TIME).clamp(0.0, 1.0);
+    let recoil_px = recoil01 * recoil01 * (1.0 - recoil01) * 4.0 * 6.0 * z;
+
+    let draw_layer = |tex: &Texture2D, ox: f32, oy: f32, size: f32| {
+        let tw = tex.width();
+        let th = tex.height();
+        let aspect = if tw > 0.1 { th / tw } else { 1.0 };
+        let dw = size;
+        let dh = size * aspect;
+        draw_texture_ex(
+            tex,
+            ox - dw * 0.5,
+            oy - dh * 0.5,
+            WHITE,
+            DrawTextureParams {
+                dest_size: Some(vec2(dw, dh)),
+                rotation: rot,
+                pivot: Some(vec2(ox, oy)),
+                ..Default::default()
+            },
+        );
+    };
+
+    // Back → front: strands → thruster → base → gun1 → gun2.
+    if let Some(strands) = app.art.eye_strands.as_ref() {
+        if let Some(mat) = app.eye_strands_fx.as_ref() {
+            mat.set_uniform("Time", app.storm.time);
+            mat.set_uniform("Seed", (raider.id % 97) as f32 / 97.0);
+            gl_use_material(mat);
+            draw_layer(strands, sx, sy, body * 1.05);
+            gl_use_default_material();
+        } else {
+            draw_layer(strands, sx, sy, body * 1.05);
+        }
+    }
+
+    // Thruster: crimson/cyan exhaust from the rear housing, scaled to the Eye.
+    {
+        let flicker = 0.72
+            + 0.28
+                * ((app.storm.time * 22.0 + raider.id as f32 * 2.3).sin() * 0.5 + 0.5);
+        let speed = (raider.vx * raider.vx + raider.vy * raider.vy).sqrt();
+        let thrust = (0.45 + (speed / RAIDER_SPEED).clamp(0.0, 1.0) * 0.55) * flicker;
+        // Local -Y is behind the barrel after rot.
+        let rear_x = sx - sn * (body * 0.36);
+        let rear_y = sy + cs * (body * 0.36);
+        let px = -sn; // plume direction (away from body)
+        let py = cs;
+        let side_x = cs;
+        let side_y = sn;
+        let wobble = (app.storm.time * 14.0 + raider.id as f32).sin() * body * 0.04;
+
+        // Soft nozzle bloom under the rear plate.
+        draw_circle(
+            rear_x,
+            rear_y,
+            body * 0.16 * thrust,
+            Color::from_rgba(180, 30, 55, (90.0 * thrust) as u8),
+        );
+        draw_circle(
+            rear_x,
+            rear_y,
+            body * 0.08 * thrust,
+            Color::from_rgba(80, 220, 230, (110.0 * thrust) as u8),
+        );
+
+        for i in 0..6 {
+            let t = i as f32 / 5.0;
+            let along = body * (0.10 + t * 0.55);
+            let taper = (1.0 - t * 0.72).max(0.12);
+            let sway = wobble * (0.3 + t) * if i % 2 == 0 { 1.0 } else { -1.0 };
+            let ox = rear_x + px * along + side_x * sway;
+            let oy = rear_y + py * along + side_y * sway;
+            let rr = body * (0.20 * taper) * thrust;
+            // Outer blood-red envelope (matches strands).
+            draw_circle(
+                ox,
+                oy,
+                rr,
+                Color::from_rgba(
+                    200,
+                    25,
+                    45,
+                    (130.0 * thrust * taper) as u8,
+                ),
+            );
+            // Mid hot pink.
+            draw_circle(
+                ox - px * body * 0.02,
+                oy - py * body * 0.02,
+                rr * 0.55,
+                Color::from_rgba(
+                    255,
+                    90,
+                    110,
+                    (160.0 * thrust * taper) as u8,
+                ),
+            );
+        }
+        // Hot core + cyan spark (ties to sensor glow).
+        draw_circle(
+            rear_x + px * body * 0.06,
+            rear_y + py * body * 0.06,
+            body * 0.055 * thrust,
+            Color::from_rgba(255, 240, 245, (210.0 * thrust) as u8),
+        );
+        draw_circle(
+            rear_x + px * body * 0.14 + side_x * wobble * 0.5,
+            rear_y + py * body * 0.14 + side_y * wobble * 0.5,
+            body * 0.035 * thrust,
+            Color::from_rgba(120, 240, 255, (150.0 * thrust) as u8),
+        );
+    }
+
+    if let Some(base) = app.art.eye_base.as_ref() {
+        // Screen-space key light (upper-left), rotated into sprite UV frame.
+        let light_sx = -0.55;
+        let light_sy = -0.75;
+        let lx = light_sx * cs + light_sy * sn;
+        let ly = -light_sx * sn + light_sy * cs;
+        if let Some(mat) = app.eye_body_fx.as_ref() {
+            mat.set_uniform("LightDir", (lx, ly));
+            gl_use_material(mat);
+            draw_layer(base, sx, sy, body);
+            gl_use_default_material();
+        } else {
+            draw_layer(base, sx, sy, body);
+            // CPU fallback: soft shade + highlight discs.
+            let hr = body * 0.38;
+            draw_circle(
+                sx + light_sx.abs() * hr * 0.35,
+                sy + light_sy.abs() * hr * 0.35,
+                hr * 0.55,
+                Color::from_rgba(0, 0, 0, 45),
+            );
+            draw_circle(
+                sx + light_sx * hr * 0.45,
+                sy + light_sy * hr * 0.45,
+                hr * 0.28,
+                Color::from_rgba(255, 255, 255, 35),
+            );
+        }
+    } else {
+        draw_circle(sx, sy, body * 0.45, Color::from_rgba(230, 120, 50, 230));
+    }
+
+    if let Some(gun1) = app.art.eye_gun1.as_ref() {
+        draw_layer(gun1, sx, sy, body * 0.95);
+    }
+
+    if let Some(gun2) = app.art.eye_gun2.as_ref() {
+        let gx = sx - sn * recoil_px;
+        let gy = sy + cs * recoil_px;
+        draw_layer(gun2, gx, gy, body * 0.95);
+    }
+
+    if raider.hp < RAIDER_HP * 0.98 {
+        let bar_w = body * 0.9;
+        let pct = (raider.hp / (RAIDER_HP * 1.5)).clamp(0.05, 1.0);
+        draw_rectangle(
+            sx - bar_w * 0.5,
+            sy + body * 0.55,
+            bar_w,
+            3.0 * z.max(0.6),
+            Color::from_rgba(30, 30, 36, 220),
+        );
+        draw_rectangle(
+            sx - bar_w * 0.5,
+            sy + body * 0.55,
+            bar_w * pct,
+            3.0 * z.max(0.6),
+            Color::from_rgba(220, 80, 90, 255),
+        );
+    }
+}
+
+fn spawn_eye_blood(out: &mut Vec<BloodPixel>, x: f32, y: f32) {
+    // Circular ground stain — irregular disc of puddles (not a gravity streak).
+    let cores = 14;
+    for i in 0..cores {
+        let t = i as f32 / cores as f32;
+        let a = t * std::f32::consts::TAU + 0.31;
+        let rad = (i as f32 * 17.13).sin().abs() * 10.0 + (i % 4) as f32 * 2.5;
+        out.push(BloodPixel {
+            x: x + a.cos() * rad,
+            y: y + a.sin() * rad * 0.92,
+            vx: 0.0,
+            vy: 0.0,
+            size: 5.5 + (i % 5) as f32 * 1.8,
+            stretch: 0.85 + (i as f32 * 0.37).sin().abs() * 0.55,
+            rot: a * 0.7,
+            kind: 3,
+            fly: 0.0,
+            life: BLOOD_LINGER,
+            settled: true,
+        });
+    }
+    // Dense center blot.
+    out.push(BloodPixel {
+        x,
+        y,
+        vx: 0.0,
+        vy: 0.0,
+        size: 11.0,
+        stretch: 1.05,
+        rot: 0.4,
+        kind: 3,
+        fly: 0.0,
+        life: BLOOD_LINGER,
+        settled: true,
+    });
+
+    // Short radial spray — pins near the ring, no long vertical fall.
+    let n = 48;
+    for i in 0..n {
+        let j = ((i as f32 * 12.9898).sin() * 43758.5453).fract();
+        let j2 = ((i as f32 * 78.233).sin() * 12345.6).fract();
+        let a = (i as f32 / n as f32) * std::f32::consts::TAU + (j - 0.5) * 0.4;
+        let dist = 8.0 + j * 28.0 + (i % 6) as f32 * 2.0;
+        let kind = if i % 6 == 0 {
+            1
+        } else if i % 4 == 0 {
+            2
+        } else {
+            0
+        };
+        let size = match kind {
+            1 => 3.8 + j * 2.5,
+            2 => 1.2 + j * 1.0,
+            _ => 2.0 + j * 2.2,
+        };
+        // Velocity only for brief outward burst; settle distance ≈ ring.
+        let sp = dist / BLOOD_FLY.max(0.05);
+        out.push(BloodPixel {
+            x,
+            y,
+            vx: a.cos() * sp,
+            vy: a.sin() * sp,
+            size,
+            stretch: 1.4 + j2 * 0.8,
+            rot: a,
+            kind,
+            fly: BLOOD_FLY * (0.35 + j * 0.45),
+            life: BLOOD_LINGER * (0.9 + j2 * 0.1),
+            settled: false,
+        });
+    }
+
+    // Outer fleck ring — already settled for instant circular read.
+    for i in 0..18 {
+        let a = (i as f32 / 18.0) * std::f32::consts::TAU + 0.15;
+        let rad = 18.0 + (i % 5) as f32 * 3.5 + (i as f32 * 2.1).sin() * 4.0;
+        out.push(BloodPixel {
+            x: x + a.cos() * rad,
+            y: y + a.sin() * rad,
+            vx: 0.0,
+            vy: 0.0,
+            size: 1.6 + (i % 4) as f32 * 0.7,
+            stretch: 1.0 + (i as f32 * 0.9).cos().abs() * 0.6,
+            rot: a,
+            kind: if i % 3 == 0 { 1 } else { 0 },
+            fly: 0.0,
+            life: BLOOD_LINGER,
+            settled: true,
+        });
+    }
+}
+
+fn tick_blood_pixels(blood: &mut Vec<BloodPixel>, dt: f32) {
+    for p in blood.iter_mut() {
+        if !p.settled {
+            p.fly -= dt;
+            // Almost no gravity — keeps the burst circular instead of a drip line.
+            p.vy += 40.0 * dt;
+            p.x += p.vx * dt;
+            p.y += p.vy * dt;
+            p.vx *= 0.90;
+            p.vy *= 0.90;
+            if p.vx * p.vx + p.vy * p.vy > 8.0 {
+                p.rot = p.vy.atan2(p.vx);
+            }
+            if p.fly <= 0.0 {
+                p.settled = true;
+                p.vx = 0.0;
+                p.vy = 0.0;
+                match p.kind {
+                    1 => {
+                        p.size *= 1.4;
+                        p.stretch = 1.1 + (p.rot * 2.7).sin().abs() * 0.6;
+                    }
+                    2 => {
+                        p.size *= 1.05;
+                        p.stretch = 1.0;
+                    }
+                    _ => {
+                        p.size *= 1.25;
+                        p.stretch = 1.2 + (p.x * 0.11).sin().abs() * 0.9;
+                    }
+                }
+            }
+        } else {
+            p.life -= dt;
+        }
+    }
+    blood.retain(|p| p.life > 0.0);
+}
+
+fn draw_blood_pixels(blood: &[BloodPixel], cam: &Cam) {
+    for p in blood {
+        if !cam.world_circle_visible(p.x, p.y, p.size * p.stretch * 2.0, 10.0) {
+            continue;
+        }
+        let (sx, sy) = cam.world_to_screen(p.x, p.y);
+        let fade = if p.settled {
+            (p.life / BLOOD_LINGER).clamp(0.0, 1.0)
+        } else {
+            1.0
+        };
+        let a = if p.settled && p.life < 2.0 {
+            fade * (p.life / 2.0).clamp(0.0, 1.0)
+        } else {
+            fade
+        };
+        let z = cam.zoom;
+        let radius = (p.size * ((p.stretch + 1.0) * 0.5) * z).max(GAS_FX_PIXEL);
+        let (fill, rim) = match p.kind {
+            3 => (
+                Color::from_rgba(110, 8, 24, (210.0 * a) as u8),
+                Color::from_rgba(155, 22, 42, (150.0 * a) as u8),
+            ),
+            1 => (
+                Color::from_rgba(145, 10, 30, (235.0 * a) as u8),
+                Color::from_rgba(195, 35, 55, (170.0 * a) as u8),
+            ),
+            2 => (
+                Color::from_rgba(165, 28, 48, (130.0 * a) as u8),
+                Color::from_rgba(205, 65, 85, (90.0 * a) as u8),
+            ),
+            _ => (
+                Color::from_rgba(170, 12, 36, (240.0 * a) as u8),
+                Color::from_rgba(240, 60, 80, (160.0 * a) as u8),
+            ),
+        };
+        // Pixel mosaic — same language as lightning / cannon FX.
+        draw_fx_pixel_disc(cam, sx, sy, radius, fill);
+        if radius > GAS_FX_PIXEL * 1.5 {
+            draw_fx_pixel_disc(cam, sx, sy, radius * 0.45, rim);
+        }
+        if p.settled && matches!(p.kind, 0 | 1 | 3) {
+            let n_fleck = if p.kind == 3 { 3 } else { 2 };
+            for f in 0..n_fleck {
+                let fa = p.rot + f as f32 * 2.1 + p.size * 0.15;
+                let fd = p.size * (0.55 + f as f32 * 0.25) * z;
+                let fr = (p.size * 0.28 * z).max(GAS_FX_PIXEL * 0.75);
+                draw_fx_pixel_disc(
+                    cam,
+                    sx + fa.cos() * fd,
+                    sy + fa.sin() * fd,
+                    fr,
+                    Color::from_rgba(130, 6, 22, (190.0 * a) as u8),
+                );
+            }
+        }
     }
 }
 
@@ -7499,6 +8086,55 @@ fn draw_combat_shots(world: &World, cam: &Cam, lasers_via_shader: bool) {
                     sy1,
                     (5.0 + impact * 16.0) * z,
                     Color::from_rgba(255, 100, 35, (70.0 * fade) as u8),
+                );
+            }
+        } else if shot.style == SHOT_STYLE_EYE {
+            // Eye cannon bolt — red core with cyan rim.
+            let w = (2.0 * z).max(FX_PIXEL);
+            draw_fx_pixel_line(
+                cam,
+                sx0,
+                sy0,
+                sx1,
+                sy1,
+                w * 2.4,
+                Color::from_rgba(40, 200, 220, (55.0 * a) as u8),
+            );
+            draw_fx_pixel_line(
+                cam,
+                sx0,
+                sy0,
+                sx1,
+                sy1,
+                w * 1.1,
+                Color::from_rgba(255, 60, 80, (190.0 * a) as u8),
+            );
+            draw_fx_pixel_line(
+                cam,
+                sx0,
+                sy0,
+                sx1,
+                sy1,
+                w * 0.45,
+                Color::from_rgba(255, 220, 230, (220.0 * a) as u8),
+            );
+            let travel = (age * 3.0).min(1.0);
+            draw_fx_pixel_disc(
+                cam,
+                sx0 + dx * travel,
+                sy0 + dy * travel,
+                (3.5 * z) * a,
+                Color::from_rgba(255, 90, 110, (210.0 * a) as u8),
+            );
+            if travel >= 0.9 {
+                let impact = ((age - 0.25) / 0.55).clamp(0.0, 1.0);
+                let fade = (1.0 - impact) * a;
+                draw_fx_pixel_disc(
+                    cam,
+                    sx1,
+                    sy1,
+                    (4.0 + impact * 12.0) * z,
+                    Color::from_rgba(255, 50, 70, (90.0 * fade) as u8),
                 );
             }
         } else {

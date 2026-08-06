@@ -814,6 +814,8 @@ pub fn apply_save(world: &mut World, save: &GameSave) -> Result<(), String> {
                 vy: r.vy,
                 role: RaiderRole::from_u8(r.role),
                 retarget_cd: r.retarget_cd,
+                aim_angle: 0.0,
+                recoil_t: 0.0,
             }
         })
         .collect();

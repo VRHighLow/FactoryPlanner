@@ -39,6 +39,12 @@ pub const RAIDER_SPEED: f32 = 78.0;
 pub const RAIDER_DAMAGE: f32 = 14.0;
 pub const RAIDER_ATTACK_RANGE: f32 = 28.0;
 pub const RAIDER_ATTACK_INTERVAL: f32 = 0.7;
+/// Hunter (Eye) cannon stand-off range — fires instead of melee.
+pub const EYE_CANNON_RANGE: f32 = 200.0;
+pub const EYE_CANNON_INTERVAL: f32 = 1.05;
+pub const EYE_RECOIL_TIME: f32 = 0.22;
+/// CombatShot.style for Eye cannon bolts (CPU tracer).
+pub const SHOT_STYLE_EYE: u8 = 2;
 pub const MAX_RAIDERS: usize = 80;
 /// Flocking: stay near allies / don't stack.
 pub const SWARM_SEP_RADIUS: f32 = 28.0;
@@ -376,7 +382,7 @@ impl BuildingKind {
             }
             Self::Conveyor => "Drag to paint belt tiles. R rotates. Loops sideload to change lanes.",
             Self::SpawnAssault => "DEBUG — spawn an assault raider at the cursor. Free.",
-            Self::SpawnHunter => "DEBUG — spawn a hunter (prefers cannons). Free.",
+            Self::SpawnHunter => "DEBUG — spawn an Eye hunter (ranged cannon, prefers defenses). Free.",
             Self::SpawnSaboteur => "DEBUG — spawn a saboteur (prefers power). Free.",
             Self::SpawnFogcaller => "DEBUG — spawn a fogcaller (storm blot on death). Free.",
             Self::SpawnNest => "DEBUG — spawn an active nest that can launch waves. Free.",
@@ -407,7 +413,7 @@ impl BuildingKind {
             Self::PowerWire => "Power Wire",
             Self::Conveyor => "Conveyor",
             Self::SpawnAssault => "Spawn Assault",
-            Self::SpawnHunter => "Spawn Hunter",
+            Self::SpawnHunter => "Spawn Eye",
             Self::SpawnSaboteur => "Spawn Saboteur",
             Self::SpawnFogcaller => "Spawn Fogcaller",
             Self::SpawnNest => "Spawn Nest",
@@ -437,7 +443,7 @@ impl BuildingKind {
             Self::PowerWire => "Wire",
             Self::Conveyor => "Belt",
             Self::SpawnAssault => "Assault",
-            Self::SpawnHunter => "Hunter",
+            Self::SpawnHunter => "Eye",
             Self::SpawnSaboteur => "Saboteur",
             Self::SpawnFogcaller => "Fogcall",
             Self::SpawnNest => "Nest",
@@ -1216,6 +1222,10 @@ pub struct Raider {
     pub vy: f32,
     pub role: RaiderRole,
     pub retarget_cd: f32,
+    /// Facing for Eye draw / muzzle (radians, 0 = +X).
+    pub aim_angle: f32,
+    /// Seconds remaining on barrel recoil animation.
+    pub recoil_t: f32,
 }
 
 #[derive(Clone, Debug)]
@@ -1233,6 +1243,8 @@ pub struct CombatReport {
     pub nests_revealed: usize,
     pub nests_reawakened: usize,
     pub waves_launched: usize,
+    /// Hunter (Eye) death positions for pixel-blood FX.
+    pub hunter_deaths: Vec<(f32, f32)>,
 }
 
 #[derive(Clone, Debug)]
@@ -2279,10 +2291,12 @@ impl World {
 
         let mut damage: Vec<(u32, f32)> = Vec::new();
         let mut new_blots: Vec<StormBlot> = Vec::new();
+        let mut eye_shots: Vec<CombatShot> = Vec::new();
         for raider in &mut self.raiders {
             if raider.hp <= 0.0 {
                 continue;
             }
+            raider.recoil_t = (raider.recoil_t - dt).max(0.0);
             let (tx, ty) = raider
                 .target_node
                 .and_then(|tid| centers.get(&tid).copied())
@@ -2303,12 +2317,12 @@ impl World {
                 if d2 < 0.01 {
                     continue;
                 }
-                let d = d2.sqrt();
-                if d < SWARM_SEP_RADIUS {
+                if d2 < SWARM_SEP_RADIUS * SWARM_SEP_RADIUS {
+                    let d = d2.sqrt();
                     sep_x += dx / d;
                     sep_y += dy / d;
                 }
-                if d < SWARM_COH_RADIUS {
+                if d2 < SWARM_COH_RADIUS * SWARM_COH_RADIUS {
                     coh_x += ox;
                     coh_y += oy;
                     coh_n += 1.0;
@@ -2319,28 +2333,46 @@ impl World {
                 coh_y = coh_y / coh_n - raider.y;
             }
 
-            let dx = tx - raider.x;
-            let dy = ty - raider.y;
-            let dist = (dx * dx + dy * dy).sqrt().max(0.001);
-            let seek_x = dx / dist;
-            let seek_y = dy / dist;
+            let to_tx = tx - raider.x;
+            let to_ty = ty - raider.y;
+            let dist = (to_tx * to_tx + to_ty * to_ty).sqrt().max(0.001);
+            if dist > 4.0 {
+                raider.aim_angle = to_ty.atan2(to_tx);
+            } else if raider.vx * raider.vx + raider.vy * raider.vy > 4.0 {
+                raider.aim_angle = raider.vy.atan2(raider.vx);
+            }
 
-            // Hunters rush defenses a bit harder; saboteurs slightly sneakier (slower).
-            let role_speed = match raider.role {
-                RaiderRole::Assault => 1.0,
-                RaiderRole::Hunter => 1.12,
-                RaiderRole::Saboteur => 0.92,
-                RaiderRole::Fogcaller => 0.72,
+            let engage = if raider.role == RaiderRole::Hunter {
+                EYE_CANNON_RANGE
+            } else {
+                RAIDER_ATTACK_RANGE
             };
-            let mut steer_x = seek_x * 1.15 + sep_x * 1.25 + coh_x * 0.012;
-            let mut steer_y = seek_y * 1.15 + sep_y * 1.25 + coh_y * 0.012;
-            let sl = (steer_x * steer_x + steer_y * steer_y).sqrt().max(0.001);
-            steer_x /= sl;
-            steer_y /= sl;
 
-            let speed = RAIDER_SPEED * role_speed * (0.88 + (raider.wave_id % 5) as f32 * 0.03);
-            raider.vx = raider.vx * 0.8 + steer_x * speed * 0.2;
-            raider.vy = raider.vy * 0.8 + steer_y * speed * 0.2;
+            // Seek target with flocking; stop once in engage range.
+            let inv = 1.0 / dist;
+            let mut ax = to_tx * inv;
+            let mut ay = to_ty * inv;
+            ax += sep_x * 0.85 + coh_x * 0.012;
+            ay += sep_y * 0.85 + coh_y * 0.012;
+            let alen = (ax * ax + ay * ay).sqrt().max(0.001);
+            ax /= alen;
+            ay /= alen;
+
+            let speed = RAIDER_SPEED
+                * match raider.role {
+                    // Hunters rush defenses a bit harder; saboteurs slightly sneakier (slower).
+                    RaiderRole::Assault => 1.0,
+                    RaiderRole::Hunter => 1.12,
+                    RaiderRole::Saboteur => 0.92,
+                    RaiderRole::Fogcaller => 0.72,
+                };
+            if dist > engage {
+                raider.vx = ax * speed;
+                raider.vy = ay * speed;
+            } else {
+                raider.vx *= 0.55;
+                raider.vy *= 0.55;
+            }
             let vlen = (raider.vx * raider.vx + raider.vy * raider.vy)
                 .sqrt()
                 .max(0.001);
@@ -2349,7 +2381,7 @@ impl World {
                 raider.vy *= speed / vlen;
             }
 
-            if dist > RAIDER_ATTACK_RANGE {
+            if dist > engage {
                 raider.x += raider.vx * dt;
                 raider.y += raider.vy * dt;
             } else if let Some(tid) = raider.target_node {
@@ -2357,27 +2389,47 @@ impl World {
                 raider.vy *= 0.45;
                 raider.attack_cd -= dt;
                 if raider.attack_cd <= 0.0 {
-                    raider.attack_cd = RAIDER_ATTACK_INTERVAL;
-                    let dmg = match raider.role {
-                        RaiderRole::Assault => RAIDER_DAMAGE,
-                        RaiderRole::Hunter => RAIDER_DAMAGE * 1.15,
-                        RaiderRole::Saboteur => RAIDER_DAMAGE * 1.25,
-                        RaiderRole::Fogcaller => RAIDER_DAMAGE * 0.85,
-                    };
-                    damage.push((tid, dmg));
-                    if raider.role == RaiderRole::Fogcaller {
-                        new_blots.push(StormBlot {
-                            x: raider.x,
-                            y: raider.y,
-                            radius: FOG_BLOT_RADIUS * 0.65,
-                            life: FOG_BLOT_LIFE * 0.55,
-                            tick_cd: 0.15,
+                    if raider.role == RaiderRole::Hunter {
+                        raider.attack_cd = EYE_CANNON_INTERVAL;
+                        raider.recoil_t = EYE_RECOIL_TIME;
+                        let dmg = RAIDER_DAMAGE * 1.15;
+                        damage.push((tid, dmg));
+                        let muzzle_r = RAIDER_RADIUS * 1.6;
+                        let mx = raider.x + raider.aim_angle.cos() * muzzle_r;
+                        let my = raider.y + raider.aim_angle.sin() * muzzle_r;
+                        eye_shots.push(CombatShot {
+                            x0: mx,
+                            y0: my,
+                            x1: tx,
+                            y1: ty,
+                            life: 0.35,
+                            max_life: 0.35,
+                            style: SHOT_STYLE_EYE,
                         });
+                    } else {
+                        raider.attack_cd = RAIDER_ATTACK_INTERVAL;
+                        let dmg = match raider.role {
+                            RaiderRole::Assault => RAIDER_DAMAGE,
+                            RaiderRole::Hunter => RAIDER_DAMAGE * 1.15,
+                            RaiderRole::Saboteur => RAIDER_DAMAGE * 1.25,
+                            RaiderRole::Fogcaller => RAIDER_DAMAGE * 0.85,
+                        };
+                        damage.push((tid, dmg));
+                        if raider.role == RaiderRole::Fogcaller {
+                            new_blots.push(StormBlot {
+                                x: raider.x,
+                                y: raider.y,
+                                radius: FOG_BLOT_RADIUS * 0.65,
+                                life: FOG_BLOT_LIFE * 0.55,
+                                tick_cd: 0.15,
+                            });
+                        }
                     }
                 }
             }
         }
         self.storm_blots.extend(new_blots);
+        self.combat_shots.extend(eye_shots);
 
         let mut dead_buildings: Vec<u32> = Vec::new();
         for (tid, dmg) in damage {
@@ -2551,6 +2603,13 @@ impl World {
             .collect();
         self.storm_blots.extend(death_blots);
 
+        report.hunter_deaths = self
+            .raiders
+            .iter()
+            .filter(|r| r.hp <= 0.0 && r.role == RaiderRole::Hunter)
+            .map(|r| (r.x, r.y))
+            .collect();
+
         self.raiders.retain(|r| r.hp > 0.0);
         self.nests.retain(|n| n.hp > 0.0);
         report
@@ -2624,6 +2683,8 @@ impl World {
                 vy: ang.sin() * RAIDER_SPEED * 0.3,
                 role,
                 retarget_cd: RETARGET_INTERVAL * 0.5,
+                aim_angle: ang,
+                recoil_t: 0.0,
             });
         }
     }
@@ -2698,6 +2759,8 @@ impl World {
             vy: 0.0,
             role,
             retarget_cd: 0.2,
+            aim_angle: -std::f32::consts::FRAC_PI_2,
+            recoil_t: 0.0,
         });
         true
     }

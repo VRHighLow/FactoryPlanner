@@ -81,7 +81,7 @@ jobs:
           fi
           # Runtime data only — art, icons, era packs. No src/, no docs/, no .git.
           mkdir -p "$PKG/assets"
-          for dir in belts buildings data environment icons items ui; do
+          for dir in belts buildings data environment icons items ui enemies; do
             if [[ -d "assets/$dir" ]]; then
               cp -R "assets/$dir" "$PKG/assets/"
             fi
