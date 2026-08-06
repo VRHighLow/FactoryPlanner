@@ -3,8 +3,14 @@
 use super::types::*;
 use crate::sim::Item;
 use std::collections::{HashMap, HashSet};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
+
+const EMBEDDED_ITEMS: &str = include_str!("../../assets/data/era1/items.json");
+const EMBEDDED_FLUIDS: &str = include_str!("../../assets/data/era1/fluids.json");
+const EMBEDDED_RECIPES: &str = include_str!("../../assets/data/era1/recipes.json");
+const EMBEDDED_MACHINES: &str = include_str!("../../assets/data/era1/machines.json");
+const EMBEDDED_TECHS: &str = include_str!("../../assets/data/era1/technologies.json");
 
 static CONTENT: OnceLock<ContentRegistry> = OnceLock::new();
 
@@ -55,8 +61,19 @@ pub struct ContentRegistry {
 
 impl ContentRegistry {
     pub fn load_default() -> Result<Self, String> {
-        let root = Path::new("assets/data/era1");
-        Self::load_from(root)
+        // Dev: cwd/assets. Release: assets next to the exe. Bare exe: embedded JSON.
+        for root in asset_data_roots() {
+            if root.join("items.json").is_file() {
+                return Self::load_from(&root);
+            }
+        }
+        Self::load_from_strs(
+            EMBEDDED_ITEMS,
+            EMBEDDED_FLUIDS,
+            EMBEDDED_RECIPES,
+            EMBEDDED_MACHINES,
+            EMBEDDED_TECHS,
+        )
     }
 
     pub fn load_from(root: &Path) -> Result<Self, String> {
@@ -65,7 +82,31 @@ impl ContentRegistry {
         let recipes_raw: Vec<RecipeDef> = read_json(&root.join("recipes.json"))?;
         let machines_raw: Vec<MachineDef> = read_json(&root.join("machines.json"))?;
         let techs_raw: Vec<TechDef> = read_json(&root.join("technologies.json"))?;
+        Self::from_defs(items_raw, fluids_raw, recipes_raw, machines_raw, techs_raw)
+    }
 
+    fn load_from_strs(
+        items: &str,
+        fluids: &str,
+        recipes: &str,
+        machines: &str,
+        techs: &str,
+    ) -> Result<Self, String> {
+        let items_raw: Vec<ItemDef> = parse_json_str(items, "embedded items.json")?;
+        let fluids_raw: Vec<ItemDef> = parse_json_str(fluids, "embedded fluids.json")?;
+        let recipes_raw: Vec<RecipeDef> = parse_json_str(recipes, "embedded recipes.json")?;
+        let machines_raw: Vec<MachineDef> = parse_json_str(machines, "embedded machines.json")?;
+        let techs_raw: Vec<TechDef> = parse_json_str(techs, "embedded technologies.json")?;
+        Self::from_defs(items_raw, fluids_raw, recipes_raw, machines_raw, techs_raw)
+    }
+
+    fn from_defs(
+        items_raw: Vec<ItemDef>,
+        fluids_raw: Vec<ItemDef>,
+        recipes_raw: Vec<RecipeDef>,
+        machines_raw: Vec<MachineDef>,
+        techs_raw: Vec<TechDef>,
+    ) -> Result<Self, String> {
         let mut reg = Self {
             items: Vec::new(),
             recipes: Vec::new(),
@@ -279,26 +320,6 @@ impl ContentRegistry {
             machines: reg.machines.len(),
             technologies: reg.techs.len(),
         };
-        if let Ok(manifest) = read_json::<Manifest>(&root.join("manifest.json")) {
-            let c = &manifest.counts;
-            let checks = [
-                ("items", c.items, reg.stats.items),
-                ("fluids", c.fluids, reg.stats.fluids),
-                ("recipes", c.recipes, reg.stats.recipes),
-                ("machines", c.machines, reg.stats.machines),
-                ("technologies", c.technologies, reg.stats.technologies),
-            ];
-            for (label, expect, got) in checks {
-                // Loaded item count includes legacy aliases — allow >= manifest.
-                if got < expect {
-                    reg.validation_errors.push(format!(
-                        "manifest {label}: pack has {got}, expected at least {expect} ({})",
-                        manifest.name
-                    ));
-                }
-            }
-            let _ = manifest.era;
-        }
 
         if !reg.validation_errors.is_empty() {
             eprintln!(
@@ -784,10 +805,27 @@ pub struct ProductionTreeRow {
     pub cyclic: bool,
 }
 
+fn asset_data_roots() -> Vec<PathBuf> {
+    let mut roots = Vec::new();
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(dir) = exe.parent() {
+            roots.push(dir.join("assets").join("data").join("era1"));
+            // Dev: target/release or target/debug → repo assets/
+            roots.push(dir.join("..").join("..").join("assets").join("data").join("era1"));
+        }
+    }
+    roots.push(PathBuf::from("assets/data/era1"));
+    roots
+}
+
 fn read_json<T: serde::de::DeserializeOwned>(path: &Path) -> Result<T, String> {
     let text = std::fs::read_to_string(path)
         .map_err(|e| format!("read {}: {e}", path.display()))?;
     serde_json::from_str(&text).map_err(|e| format!("parse {}: {e}", path.display()))
+}
+
+fn parse_json_str<T: serde::de::DeserializeOwned>(text: &str, label: &str) -> Result<T, String> {
+    serde_json::from_str(text).map_err(|e| format!("parse {label}: {e}"))
 }
 
 fn parse_research_seconds(s: &str) -> f32 {

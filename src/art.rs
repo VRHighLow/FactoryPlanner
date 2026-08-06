@@ -1,6 +1,7 @@
 //! Runtime art loaded from `assets/` (WebP/PNG with alpha).
 
 use macroquad::prelude::*;
+use std::path::PathBuf;
 
 pub const CRACK_VARIANTS: usize = 3;
 
@@ -150,36 +151,60 @@ pub fn try_load_tex(path: &str) -> Option<Texture2D> {
 }
 
 fn load_tex(path: &str) -> Option<Texture2D> {
-    let data = std::fs::read(path).ok()?;
-    let img = image::load_from_memory(&data).ok()?.to_rgba8();
-    let (w, h) = img.dimensions();
-    if w == 0 || h == 0 || w > u16::MAX as u32 || h > u16::MAX as u32 {
-        return None;
+    for candidate in asset_file_candidates(path) {
+        if let Ok(data) = std::fs::read(&candidate) {
+            if let Ok(img) = image::load_from_memory(&data).map(|i| i.to_rgba8()) {
+                let (w, h) = img.dimensions();
+                if w > 0 && h > 0 && w <= u16::MAX as u32 && h <= u16::MAX as u32 {
+                    return Some(Texture2D::from_rgba8(w as u16, h as u16, img.as_raw()));
+                }
+            }
+        }
     }
-    Some(Texture2D::from_rgba8(w as u16, h as u16, img.as_raw()))
+    None
+}
+
+fn asset_file_candidates(path: &str) -> Vec<PathBuf> {
+    let mut out = Vec::new();
+    let rel = PathBuf::from(path);
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(dir) = exe.parent() {
+            out.push(dir.join(&rel));
+            out.push(dir.join("..").join("..").join(&rel));
+        }
+    }
+    out.push(rel);
+    out
 }
 
 /// Crack mask: black+alpha void texture + CPU alpha for collision.
 fn load_crack_void_and_mask(path: &str) -> Option<(Texture2D, CrackMask)> {
-    let data = std::fs::read(path).ok()?;
-    let img = image::load_from_memory(&data).ok()?.to_rgba8();
-    let (w, h) = img.dimensions();
-    if w == 0 || h == 0 || w > u16::MAX as u32 || h > u16::MAX as u32 {
-        return None;
-    }
-    let mut void_bytes = img.as_raw().to_vec();
-    let mut alpha = Vec::with_capacity((w * h) as usize);
-    for px in void_bytes.chunks_exact_mut(4) {
-        alpha.push(px[3]);
-        if px[3] > 0 {
-            px[0] = 0;
-            px[1] = 0;
-            px[2] = 0;
+    for candidate in asset_file_candidates(path) {
+        let Ok(data) = std::fs::read(&candidate) else {
+            continue;
+        };
+        let Ok(img) = image::load_from_memory(&data).map(|i| i.to_rgba8()) else {
+            continue;
+        };
+        let (w, h) = img.dimensions();
+        if w == 0 || h == 0 || w > u16::MAX as u32 || h > u16::MAX as u32 {
+            continue;
         }
+        let mut void_bytes = img.as_raw().to_vec();
+        let mut alpha = Vec::with_capacity((w * h) as usize);
+        for px in void_bytes.chunks_exact_mut(4) {
+            alpha.push(px[3]);
+            if px[3] > 0 {
+                px[0] = 0;
+                px[1] = 0;
+                px[2] = 0;
+            }
+        }
+        let void = Texture2D::from_rgba8(w as u16, h as u16, &void_bytes);
+        let mask = CrackMask { w, h, alpha };
+        return Some((void, mask));
     }
-    let void = Texture2D::from_rgba8(w as u16, h as u16, &void_bytes);
-    let mask = CrackMask { w, h, alpha };
-    Some((void, mask))
+    None
 }
 
 fn solid_fallback(c: Color) -> Texture2D {
