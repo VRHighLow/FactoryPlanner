@@ -151,10 +151,6 @@ impl Art {
 }
 
 /// Decode WebP/PNG via the `image` crate — macroquad's built-in loader has no WebP.
-pub fn try_load_tex(path: &str) -> Option<Texture2D> {
-    load_tex(path)
-}
-
 fn load_tex(path: &str) -> Option<Texture2D> {
     for candidate in asset_file_candidates(path) {
         if let Ok(data) = std::fs::read(&candidate) {

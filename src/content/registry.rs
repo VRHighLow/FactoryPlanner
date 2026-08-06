@@ -11,6 +11,7 @@ const EMBEDDED_FLUIDS: &str = include_str!("../../assets/data/era1/fluids.json")
 const EMBEDDED_RECIPES: &str = include_str!("../../assets/data/era1/recipes.json");
 const EMBEDDED_MACHINES: &str = include_str!("../../assets/data/era1/machines.json");
 const EMBEDDED_TECHS: &str = include_str!("../../assets/data/era1/technologies.json");
+const EMBEDDED_MANIFEST: &str = include_str!("../../assets/data/era1/manifest.json");
 
 static CONTENT: OnceLock<ContentRegistry> = OnceLock::new();
 
@@ -57,6 +58,7 @@ pub struct ContentRegistry {
     recipes_by_category: HashMap<String, Vec<u16>>,
     pub stats: ContentStats,
     pub validation_errors: Vec<String>,
+    pub era_name: String,
 }
 
 impl ContentRegistry {
@@ -126,6 +128,7 @@ impl ContentRegistry {
                 technologies: 0,
             },
             validation_errors: Vec::new(),
+            era_name: "Era 1".into(),
         };
 
         // 1) Reserve legacy Item slots 0..23 so save/net stay stable, aliased to Era 1 ids.
@@ -321,6 +324,35 @@ impl ContentRegistry {
             technologies: reg.techs.len(),
         };
 
+        if let Ok(manifest) = serde_json::from_str::<Manifest>(EMBEDDED_MANIFEST) {
+            reg.era_name = if manifest.name.is_empty() {
+                format!("Era {}", manifest.era)
+            } else {
+                format!("Era {} — {}", manifest.era, manifest.name)
+            };
+            // Manifest counts are authoring targets; runtime includes legacy aliases,
+            // so only log large mismatches as soft warnings.
+            let soft = [
+                ("items", manifest.counts.items, reg.stats.items),
+                ("fluids", manifest.counts.fluids, reg.stats.fluids),
+                ("recipes", manifest.counts.recipes, reg.stats.recipes),
+                ("machines", manifest.counts.machines, reg.stats.machines),
+                (
+                    "technologies",
+                    manifest.counts.technologies,
+                    reg.stats.technologies,
+                ),
+            ];
+            for (label, expected, got) in soft {
+                let delta = expected.abs_diff(got);
+                if delta > expected / 5 && delta > 5 {
+                    eprintln!(
+                        "[era1] manifest {label} count {expected} vs loaded {got} (delta {delta})"
+                    );
+                }
+            }
+        }
+
         if !reg.validation_errors.is_empty() {
             eprintln!(
                 "[era1] content validation: {} issue(s)",
@@ -335,7 +367,8 @@ impl ContentRegistry {
         }
 
         eprintln!(
-            "[era1] loaded items={} fluids={} recipes={} machines={} techs={}",
+            "[era1] {} — items={} fluids={} recipes={} machines={} techs={}",
+            reg.era_name,
             reg.stats.items,
             reg.stats.fluids,
             reg.stats.recipes,

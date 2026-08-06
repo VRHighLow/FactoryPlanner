@@ -381,7 +381,6 @@ pub fn menu_title(title: &str, subtitle: &str, top: f32) {
 /// Layout for a centered titled menu panel with a right-side category rail.
 #[derive(Clone, Copy)]
 pub struct MenuShellLayout {
-    pub panel: Rect,
     /// Inner area for page content (excludes footer strip).
     pub content: Rect,
     /// Bottom strip inside the panel for Apply / Back.
@@ -437,7 +436,6 @@ pub fn menu_shell(title: &str, panel_w: f32, panel_h: f32, footer_h: f32) -> Men
     };
 
     MenuShellLayout {
-        panel: panel_rect,
         content,
         footer,
         cat_origin: (panel_rect.x + panel_rect.w + cat_gap, panel_rect.y + 4.0),

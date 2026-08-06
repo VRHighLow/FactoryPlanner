@@ -67,6 +67,56 @@ impl EffectQuality {
     }
 }
 
+/// Render FPS cap. Simulation stays at fixed 60 UPS regardless.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum FpsLimit {
+    Fps30,
+    Fps60,
+    #[default]
+    Fps120,
+    Fps144,
+    Fps240,
+    Unlimited,
+}
+
+impl FpsLimit {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Fps30 => "30",
+            Self::Fps60 => "60",
+            Self::Fps120 => "120",
+            Self::Fps144 => "144",
+            Self::Fps240 => "240",
+            Self::Unlimited => "Unlimited",
+        }
+    }
+
+    pub fn next(self) -> Self {
+        match self {
+            Self::Fps30 => Self::Fps60,
+            Self::Fps60 => Self::Fps120,
+            Self::Fps120 => Self::Fps144,
+            Self::Fps144 => Self::Fps240,
+            Self::Fps240 => Self::Unlimited,
+            Self::Unlimited => Self::Fps30,
+        }
+    }
+
+    /// `None` = no software sleep (run as fast as the GPU/CPU allow).
+    pub fn frame_budget(self) -> Option<std::time::Duration> {
+        let fps = match self {
+            Self::Fps30 => 30.0,
+            Self::Fps60 => 60.0,
+            Self::Fps120 => 120.0,
+            Self::Fps144 => 144.0,
+            Self::Fps240 => 240.0,
+            Self::Unlimited => return None,
+        };
+        Some(std::time::Duration::from_secs_f64(1.0 / fps))
+    }
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Settings {
     pub display_mode: DisplayMode,
@@ -77,6 +127,9 @@ pub struct Settings {
     /// Storm / gas / lightning fidelity.
     #[serde(default)]
     pub effect_quality: EffectQuality,
+    /// Software render FPS cap (player speed uses fixed UPS, not this).
+    #[serde(default)]
+    pub fps_limit: FpsLimit,
     /// Next autosave slot index (0..AUTOSAVE_SLOTS).
     pub autosave_next: usize,
 }
@@ -90,6 +143,7 @@ impl Default for Settings {
             window_h: 900,
             show_fps: true,
             effect_quality: EffectQuality::Medium,
+            fps_limit: FpsLimit::Fps120,
             autosave_next: 0,
         }
     }

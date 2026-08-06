@@ -10,6 +10,7 @@ mod recipes;
 mod sim;
 mod net;
 mod save;
+mod perf_log;
 mod ui_chrome;
 
 use macroquad::prelude::*;
@@ -43,8 +44,7 @@ const MAX_ZOOM: f32 = 2.5;
 const GRID_MINOR: f32 = 40.0;
 const GRID_MAJOR_EVERY: i32 = 10;
 const HOTBAR_SLOTS: usize = 9;
-const TARGET_FPS: f64 = 120.0;
-/// Fixed simulation rate (Factorio-style UPS). Render stays at TARGET_FPS.
+/// Fixed simulation rate (Factorio-style UPS). Independent of render FPS.
 const TARGET_UPS: f64 = 60.0;
 const FIXED_DT: f32 = 1.0 / TARGET_UPS as f32;
 /// Cap catch-up steps so a hitch doesn't spiral the sim.
@@ -809,6 +809,23 @@ enum Screen {
     LoadGame,
 }
 
+impl Screen {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Main => "main",
+            Self::SinglePlayer => "single",
+            Self::Play => "new_game",
+            Self::Multiplayer => "multi",
+            Self::HostSetup => "host_setup",
+            Self::HostLobby => "host_lobby",
+            Self::JoinLobby => "join",
+            Self::Game => "game",
+            Self::Settings => "settings",
+            Self::LoadGame => "load",
+        }
+    }
+}
+
 /// New Game / Load Game destination: solo vs hosting a session.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum MenuPlayIntent {
@@ -1233,82 +1250,11 @@ impl Storm {
         let zones = self.clear_zones(world);
         !self.in_clear(wx, wy, &zones)
     }
-
-    /// 0 = clear, 1 = deep storm (visual / CPU fog only — not for build rules).
-    fn coverage_at(&self, wx: f32, wy: f32, zones: &[(f32, f32, f32)]) -> f32 {
-        let t = self.time * 0.028;
-        let q = (wx * 0.00155, wy * 0.00155);
-        let warp_x = storm_fbm(q.0 + t, q.1) - 0.5;
-        let warp_y = storm_fbm(q.0 + 5.2, q.1 - t) - 0.5;
-        let px = q.0 + warp_x * 1.25;
-        let py = q.1 + warp_y * 1.25;
-        let lumps = storm_fbm(px * 1.25, py * 1.25);
-        let detail = storm_fbm(px * 3.4 + t * 0.45, py * 3.4);
-        let fine = storm_fbm(px * 7.0 - t * 0.2, py * 7.0);
-        let mist = lumps * 0.55 + detail * 0.30 + fine * 0.15;
-
-        let mut clear_amt = 0.0_f32;
-        for &(cx, cy, radius) in zones {
-            if radius < 1.0 {
-                continue;
-            }
-            let dx = (wx - cx) / radius;
-            let dy = (wy - cy) / radius;
-            let rr = (dx * dx + dy * dy).sqrt();
-            let coast = 0.78 + (mist - 0.5) * 0.85 + (fine - 0.5) * 0.25;
-            let inside = 1.0 - smoothstep(coast - 0.32, coast + 0.48, rr);
-            clear_amt = clear_amt.max(inside);
-        }
-        let outside = 1.0 - clear_amt;
-        let body = smoothstep(0.16, 0.52, mist);
-        let holes = 1.0 - smoothstep(0.10, 0.32, detail) * 0.38;
-        (outside * body * holes).clamp(0.0, 1.0)
-    }
 }
 
 fn storm_hash01(seed: f32) -> f32 {
     let x = (seed * 12.9898).sin() * 43758.5453;
     x.fract().abs()
-}
-
-fn storm_hash(x: i32, y: i32) -> f32 {
-    let mut n = x.wrapping_mul(374761393).wrapping_add(y.wrapping_mul(668265263));
-    n = (n ^ (n >> 13)).wrapping_mul(1274126177);
-    (n & 0x7fff_ffff) as f32 / 0x7fff_ffff as f32
-}
-
-fn storm_noise(x: f32, y: f32) -> f32 {
-    let x0 = x.floor() as i32;
-    let y0 = y.floor() as i32;
-    let fx = x - x0 as f32;
-    let fy = y - y0 as f32;
-    let ux = fx * fx * (3.0 - 2.0 * fx);
-    let uy = fy * fy * (3.0 - 2.0 * fy);
-    let a = storm_hash(x0, y0);
-    let b = storm_hash(x0 + 1, y0);
-    let c = storm_hash(x0, y0 + 1);
-    let d = storm_hash(x0 + 1, y0 + 1);
-    a * (1.0 - ux) * (1.0 - uy)
-        + b * ux * (1.0 - uy)
-        + c * (1.0 - ux) * uy
-        + d * ux * uy
-}
-
-fn storm_fbm(mut x: f32, mut y: f32) -> f32 {
-    let mut v = 0.0;
-    let mut a = 0.5;
-    for _ in 0..5 {
-        v += a * storm_noise(x, y);
-        x *= 2.03;
-        y *= 2.03;
-        a *= 0.5;
-    }
-    v
-}
-
-fn smoothstep(edge0: f32, edge1: f32, x: f32) -> f32 {
-    let t = ((x - edge0) / (edge1 - edge0)).clamp(0.0, 1.0);
-    t * t * (3.0 - 2.0 * t)
 }
 
 fn create_storm_material() -> Option<Material> {
@@ -2181,7 +2127,8 @@ async fn main() {
     match content::init_content() {
         Ok(reg) => {
             println!(
-                "Era 1 content: {} items, {} fluids, {} recipes, {} machines, {} techs",
+                "{}: {} items, {} fluids, {} recipes, {} machines, {} techs",
+                reg.era_name,
                 reg.stats.items,
                 reg.stats.fluids,
                 reg.stats.recipes,
@@ -2204,7 +2151,17 @@ async fn main() {
         app.status_toast = "GPU fog shader unavailable — using lightweight fallback".into();
     }
     app.settings.apply_runtime();
-    let frame_budget = std::time::Duration::from_secs_f64(1.0 / TARGET_FPS);
+    let mut perf = perf_log::PerfLog::start(&app.settings);
+    if app.storm.material.is_none() {
+        perf.note("storm GPU shader missing — CPU/lightweight fog path");
+    }
+    if app.ground.is_none() {
+        perf.note("ground shader missing");
+    }
+    eprintln!(
+        "Perf log: {} (send this file when reporting low FPS)",
+        perf_log::log_path().display()
+    );
     // Wall clock for sim pacing — `get_frame_time` jitters with vsync/sleep and lies about UPS.
     let mut prev_wall = Instant::now();
 
@@ -2216,6 +2173,7 @@ async fn main() {
         let frame_dt = wall_dt;
         let frame_start = now;
         let mouse = ui_chrome::pointer();
+        perf.set_screen(app.screen.as_str());
 
         match app.screen {
             Screen::Main => screen_main(&mut app, mouse, frame_dt),
@@ -2385,8 +2343,22 @@ async fn main() {
 
         next_frame().await;
         let spent = frame_start.elapsed();
-        if spent < frame_budget {
-            std::thread::sleep(frame_budget - spent);
+        let frame_ms = spent.as_secs_f32() * 1000.0;
+        let fps = get_fps() as f32;
+        perf.frame(
+            frame_ms,
+            fps,
+            app.measured_ups,
+            app.world.nodes.len(),
+            app.world.belt_tiles.len(),
+            app.peers.len(),
+            app.settings.effect_quality,
+            app.settings.fps_limit,
+        );
+        if let Some(budget) = app.settings.fps_limit.frame_budget() {
+            if spent < budget {
+                std::thread::sleep(budget - spent);
+            }
         }
     }
 }
@@ -2422,10 +2394,6 @@ fn menu_panel_geom(btn_count: usize) -> (f32, f32, f32, f32, f32) {
     let bx = (screen_width() - bw) * 0.5;
     let top = ((screen_height() - total_h) * 0.5).max(36.0);
     (bx, top, bw, bh, gap)
-}
-
-fn draw_menu_storm_backdrop(app: &mut App, dt: f32, title: &str, subtitle: &str) {
-    draw_menu_storm_backdrop_ex(app, dt, Some((title, subtitle)));
 }
 
 fn draw_menu_storm_backdrop_ex(app: &mut App, dt: f32, title: Option<(&str, &str)>) {
@@ -2489,6 +2457,8 @@ fn draw_main_menu_version() {
         fs,
         TEXT_DIM,
     );
+    let hint = format!("Perf log: {}", perf_log::log_path().display());
+    draw_text(&hint, 18.0, screen_height() - 18.0, 14.0, TEXT_DIM);
 }
 
 fn screen_main(app: &mut App, mouse: (f32, f32), dt: f32) {
@@ -2522,6 +2492,7 @@ fn screen_main(app: &mut App, mouse: (f32, f32), dt: f32) {
     y += bh + gap;
 
     if ui_chrome::button_styled("Exit", bx, y, bw, bh, mouse, ButtonStyle::Danger) {
+        perf_log::append_shutdown_note("user Exit");
         std::process::exit(0);
     }
 
@@ -2530,11 +2501,29 @@ fn screen_main(app: &mut App, mouse: (f32, f32), dt: f32) {
 
 fn screen_single_player(app: &mut App, mouse: (f32, f32), dt: f32) {
     draw_menu_storm_backdrop_ex(app, dt, None);
-    let (px, py, panel_w, panel_h, pad, _) = titled_menu_panel("Single Player", 400.0, 280.0);
+    let recent = save::most_recent_save();
+    let rows = if recent.is_some() { 3 } else { 2 };
+    let panel_h = 200.0 + rows as f32 * 64.0;
+    let (px, py, panel_w, panel_h, pad, _) = titled_menu_panel("Single Player", 400.0, panel_h);
     let bw = panel_w - pad * 2.0;
     let bh = 50.0;
     let bx = px + pad;
     let mut by = py + pad + 8.0;
+
+    if let Some(info) = recent.as_ref() {
+        let label = format!("Continue — {}", info.label);
+        if button_primary(&label, bx, by, bw, bh, mouse) {
+            match read_save(&info.path) {
+                Ok(save) => {
+                    if let Err(e) = app.enter_from_save(&save) {
+                        app.status_toast = e;
+                    }
+                }
+                Err(e) => app.status_toast = e,
+            }
+        }
+        by += bh + 14.0;
+    }
 
     if button_primary("New Game", bx, by, bw, bh, mouse) {
         app.play_intent = MenuPlayIntent::Solo;
@@ -2658,7 +2647,7 @@ fn screen_settings(app: &mut App, mouse: (f32, f32), dt: f32) {
     draw_menu_storm_backdrop_ex(app, dt, None);
 
     let panel_w = 460.0;
-    let panel_h = 440.0;
+    let panel_h = 500.0;
     let footer_h = 52.0;
     let bh = 48.0;
     let gap = 12.0;
@@ -2746,6 +2735,12 @@ fn screen_settings(app: &mut App, mouse: (f32, f32), dt: f32) {
                 mouse,
             ) {
                 app.settings.show_fps = !app.settings.show_fps;
+            }
+            by += bh + gap;
+
+            let fps_label = format!("FPS limit: {}", app.settings.fps_limit.label());
+            if button(&fps_label, bx, by, bw, bh, mouse) {
+                app.settings.fps_limit = app.settings.fps_limit.next();
             }
             by += bh + gap;
 
@@ -3213,7 +3208,6 @@ fn screen_host_lobby(app: &mut App, mouse: (f32, f32), dt: f32) {
 
     if !app.join_status.is_empty() {
         draw_text(&app.join_status, bx, by + 4.0, 16.0, ACCENT);
-        by += 28.0;
     }
 
     by = py + panel_h - pad - bh * 2.0 - 12.0;
@@ -3314,7 +3308,6 @@ fn screen_join_lobby(app: &mut App, mouse: (f32, f32), dt: f32) {
 
     if !app.join_status.is_empty() {
         draw_text(&app.join_status, bx, by, 16.0, ACCENT);
-        by += 28.0;
     }
 
     by = py + panel_h - pad - bh * 2.0 - 12.0;
