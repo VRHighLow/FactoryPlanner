@@ -4,24 +4,31 @@ Native factory builder (Linux / Windows / macOS): placeable dual-lane conveyors,
 
 ## Downloads
 
-GitHub Actions builds **Linux, Windows, and macOS** (Intel + Apple Silicon) on every `main` push and publishes them on version tags.
+GitHub Actions builds **Linux, Windows, and macOS** (Intel + Apple Silicon) on version tags.
 
 - Latest release: https://github.com/VRHighLow/FactoryPlanner/releases/latest
-- Prefer the `.zip` (includes `assets/` for icons). Run from inside the unzipped folder.
+- Download the **`.zip`**, unzip, and run the binary **from inside the folder** (so `assets/` sits next to the exe). Same layout Steam will use later — **no source code** is shipped.
 
 | Platform | Artifact |
 |----------|----------|
 | Linux x86_64 | `factory_planner-linux-x86_64.zip` |
-| Windows x86_64 | `factory_planner-windows-x86_64.exe.zip` |
+| Windows x86_64 | `factory_planner-windows-x86_64.zip` |
 | macOS Apple Silicon | `factory_planner-macos-aarch64.zip` |
 | macOS Intel | `factory_planner-macos-x86_64.zip` |
 
+```
+FactoryPlanner/
+  factory_planner.exe   # or factory_planner on Linux/macOS
+  assets/
+    belts/ buildings/ data/ environment/ icons/ items/ …
+```
+
 ```powershell
 # Windows example
-Invoke-WebRequest -Uri "https://github.com/VRHighLow/FactoryPlanner/releases/latest/download/factory_planner-windows-x86_64.exe.zip" -OutFile fp.zip
-Expand-Archive fp.zip -DestinationPath factory_planner
-cd factory_planner
-.\factory_planner-windows-x86_64.exe
+Invoke-WebRequest -Uri "https://github.com/VRHighLow/FactoryPlanner/releases/latest/download/factory_planner-windows-x86_64.zip" -OutFile fp.zip
+Expand-Archive fp.zip -DestinationPath .
+cd FactoryPlanner
+.\factory_planner.exe
 ```
 
 ## Run (dev)

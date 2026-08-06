@@ -17,23 +17,31 @@ jobs:
         include:
           - os: ubuntu-latest
             target: x86_64-unknown-linux-gnu
-            artifact: factory_planner-linux-x86_64
+            artifact: factory_planner-linux-x86_64.zip
+            pkg_name: FactoryPlanner
+            bin_name: factory_planner
           - os: windows-latest
             target: x86_64-pc-windows-msvc
-            artifact: factory_planner-windows-x86_64.exe
+            artifact: factory_planner-windows-x86_64.zip
+            pkg_name: FactoryPlanner
+            bin_name: factory_planner.exe
           - os: macos-latest
             target: aarch64-apple-darwin
-            artifact: factory_planner-macos-aarch64
+            artifact: factory_planner-macos-aarch64.zip
+            pkg_name: FactoryPlanner
+            bin_name: factory_planner
           - os: macos-latest
             target: x86_64-apple-darwin
-            artifact: factory_planner-macos-x86_64
+            artifact: factory_planner-macos-x86_64.zip
+            pkg_name: FactoryPlanner
+            bin_name: factory_planner
 
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
 
       - name: Install Linux deps
-        if: runner.os == 'Linux'
+        if: runner.os == "Linux"
         run: |
           sudo apt-get update
           sudo apt-get install -y \
@@ -55,7 +63,8 @@ jobs:
       - name: Build release
         run: cargo build --release --bin factory_planner --target ${{ matrix.target }}
 
-      - name: Stage binary
+      # Steam-style package: binary + runtime assets only (never source).
+      - name: Package game folder
         shell: bash
         run: |
           set -euo pipefail
@@ -63,7 +72,32 @@ jobs:
           if [[ "${{ runner.os }}" == "Windows" ]]; then
             BIN="${BIN}.exe"
           fi
-          cp "$BIN" "${{ matrix.artifact }}"
+          PKG="dist/${{ matrix.pkg_name }}"
+          rm -rf dist
+          mkdir -p "$PKG"
+          cp "$BIN" "$PKG/${{ matrix.bin_name }}"
+          if [[ "${{ runner.os }}" != "Windows" ]]; then
+            chmod +x "$PKG/${{ matrix.bin_name }}"
+          fi
+          # Runtime data only — art, icons, era packs. No src/, no docs/, no .git.
+          mkdir -p "$PKG/assets"
+          for dir in belts buildings data environment icons items ui; do
+            if [[ -d "assets/$dir" ]]; then
+              cp -R "assets/$dir" "$PKG/assets/"
+            fi
+          done
+          # Drop empty keepers from the player-facing package.
+          find "$PKG/assets" -name '.gitkeep' -delete 2>/dev/null || true
+          python3 - <<'PY'
+          import pathlib, shutil
+          artifact = pathlib.Path("${{ matrix.artifact }}")
+          pkg = pathlib.Path("dist") / "${{ matrix.pkg_name }}"
+          if artifact.exists():
+              artifact.unlink()
+          shutil.make_archive(artifact.with_suffix("").as_posix(), "zip", pkg.parent, pkg.name)
+          print(f"packed {artifact} ({artifact.stat().st_size} bytes)")
+          PY
+          ls -la "${{ matrix.artifact }}"
 
       - uses: actions/upload-artifact@v4
         with:
@@ -71,8 +105,7 @@ jobs:
           path: ${{ matrix.artifact }}
           if-no-files-found: error
 
-      # Upload as each platform finishes so the Releases page appears early
-      # (same behavior as pre-0.3.2), instead of waiting for every OS.
+      # Upload as each platform finishes so the Releases page appears early.
       - uses: softprops/action-gh-release@v2
         if: startsWith(github.ref, 'refs/tags/')
         with:

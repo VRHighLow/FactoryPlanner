@@ -1,5 +1,5 @@
 ---
-description: When the user says "build", cut a GitHub release with Win/Linux/macOS binaries
+description: When the user says "build", cut a GitHub release with Win/Linux/macOS game zips
 alwaysApply: true
 ---
 
@@ -16,12 +16,20 @@ When the user says **build** (or “ship it”, “release”, “publish” in 
 5. **Publish immediately**:
    - Push `main`
    - Create the GitHub Release **first** with title + notes (`gh release create`) so Assets isn’t empty of meaning
-   - Tag `vX.Y.Z` so `.github/workflows/release.yml` builds and uploads bare binaries for:
-     - `factory_planner-linux-x86_64`
-     - `factory_planner-windows-x86_64.exe`
-     - `factory_planner-macos-aarch64`
-     - `factory_planner-macos-x86_64`
-6. **Do not** zip `assets/` into the release. Bare binaries only.
+   - Tag `vX.Y.Z` so `.github/workflows/release.yml` builds and uploads **Steam-style zips** (binary + `assets/`, never source) for:
+     - `factory_planner-linux-x86_64.zip`
+     - `factory_planner-windows-x86_64.zip`
+     - `factory_planner-macos-aarch64.zip`
+     - `factory_planner-macos-x86_64.zip`
+6. **Do not** ship source in the release. Package layout inside each zip:
+
+   ```
+   FactoryPlanner/
+     factory_planner(.exe)
+     assets/
+       belts/ buildings/ data/ environment/ icons/ items/ …
+   ```
+
 7. Reply with the release URL. Don’t make the user wait on a silent watch unless they ask.
 
 Preferred order that avoids “tag but no Release / only Source code zip”:
@@ -39,4 +47,6 @@ EOF
   --target main
 ```
 
-`gh release create` creates/pushes the tag; CI then attaches the four binaries. Softprops must use `generate_release_notes: false` so it doesn’t wipe the titled notes.
+`gh release create` creates/pushes the tag; CI then attaches the four game zips. Softprops must use `generate_release_notes: false` so it doesn’t wipe the titled notes.
+
+Players unzip and run the binary from inside the folder (so `assets/` sits next to the exe). Same layout Steam will use later.

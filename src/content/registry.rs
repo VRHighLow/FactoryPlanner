@@ -808,7 +808,9 @@ pub struct ProductionTreeRow {
 fn asset_data_roots() -> Vec<PathBuf> {
     let mut roots = Vec::new();
     if let Ok(exe) = std::env::current_exe() {
+        let exe = std::fs::canonicalize(&exe).unwrap_or(exe);
         if let Some(dir) = exe.parent() {
+            // Steam / unzipped release: assets next to the binary.
             roots.push(dir.join("assets").join("data").join("era1"));
             // Dev: target/release or target/debug → repo assets/
             roots.push(dir.join("..").join("..").join("assets").join("data").join("era1"));

@@ -121,6 +121,11 @@ impl Art {
             load_tex("assets/icons/Map.webp").or_else(|| load_tex("assets/icons/Map.png"));
         let icon_tech =
             load_tex("assets/icons/Tech.webp").or_else(|| load_tex("assets/icons/Tech.png"));
+        if icon_hammer.is_none() || icon_map.is_none() || icon_tech.is_none() {
+            eprintln!(
+                "art: missing dock icons — expected assets/icons next to the executable"
+            );
+        }
 
         for t in &cracks {
             t.set_filter(FilterMode::Linear);
@@ -167,14 +172,23 @@ fn load_tex(path: &str) -> Option<Texture2D> {
 fn asset_file_candidates(path: &str) -> Vec<PathBuf> {
     let mut out = Vec::new();
     let rel = PathBuf::from(path);
-    if let Ok(exe) = std::env::current_exe() {
-        if let Some(dir) = exe.parent() {
-            out.push(dir.join(&rel));
-            out.push(dir.join("..").join("..").join(&rel));
-        }
+    // Prefer the folder next to the executable (Steam / unzipped release layout).
+    if let Some(dir) = exe_dir() {
+        out.push(dir.join(&rel));
     }
+    // Dev: cargo run from target/{debug,release}.
+    if let Some(dir) = exe_dir() {
+        out.push(dir.join("..").join("..").join(&rel));
+    }
+    // Last resort: process cwd (often wrong when launched from Explorer/Steam).
     out.push(rel);
     out
+}
+
+fn exe_dir() -> Option<PathBuf> {
+    let exe = std::env::current_exe().ok()?;
+    let exe = std::fs::canonicalize(&exe).unwrap_or(exe);
+    exe.parent().map(|p| p.to_path_buf())
 }
 
 /// Crack mask: black+alpha void texture + CPU alpha for collision.
