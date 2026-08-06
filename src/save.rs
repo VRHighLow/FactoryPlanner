@@ -88,7 +88,7 @@ impl Default for Settings {
             vsync: false,
             window_w: 1400,
             window_h: 900,
-            show_fps: false,
+            show_fps: true,
             effect_quality: EffectQuality::Medium,
             autosave_next: 0,
         }

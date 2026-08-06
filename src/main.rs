@@ -173,7 +173,8 @@ float noise(vec2 p) {
 float fbm(vec2 p) {
     float v = 0.0;
     float a = 0.5;
-    for (int i = 0; i < 5; i++) {
+    // 3 octaves — enough dirt detail, far cheaper on integrated GPUs.
+    for (int i = 0; i < 3; i++) {
         v += a * noise(p);
         p = p * 2.07 + vec2(1.7, 9.2);
         a *= 0.5;
@@ -202,7 +203,8 @@ void main() {
     vec2 p = world * 0.011;
     float soil = fbm(p);
     float mud = fbm(p * 1.85 + vec2(3.1, 8.4));
-    float grit = fbm(p * 4.2 - vec2(2.0, 1.0));
+    // Reuse soil for grit cue — skips a third full fBm on every pixel.
+    float grit = soil;
 
     // Slow storm-cloud shadows drifting across the land.
     float t = Time * 0.035;
@@ -281,7 +283,7 @@ float noise(vec2 p) {
 float fbm(vec2 p) {
     float v = 0.0;
     float a = 0.5;
-    for (int i = 0; i < 5; i++) {
+    for (int i = 0; i < 3; i++) {
         v += a * noise(p);
         p *= 2.03;
         a *= 0.5;
@@ -2198,6 +2200,9 @@ async fn main() {
     app.ground = create_ground_material();
     app.cannon_fx = create_cannon_material();
     app.gas_fx = create_gas_material();
+    if app.storm.material.is_none() {
+        app.status_toast = "GPU fog shader unavailable — using lightweight fallback".into();
+    }
     app.settings.apply_runtime();
     let frame_budget = std::time::Duration::from_secs_f64(1.0 / TARGET_FPS);
     // Wall clock for sim pacing — `get_frame_time` jitters with vsync/sleep and lies about UPS.
@@ -5334,46 +5339,16 @@ fn draw_storm(storm: &Storm, zones: &[(f32, f32, f32)], cam: &Cam) {
         return;
     }
 
-    // CPU fallback — soft storm on an 8px mosaic grid.
-    let sw = screen_width();
-    let sh = screen_height();
-    let cell = 8.0_f32;
-    let cols = (sw / cell).ceil() as i32 + 1;
-    let rows = (sh / cell).ceil() as i32 + 1;
-
-    for gy in 0..rows {
-        for gx in 0..cols {
-            let sx = gx as f32 * cell + cell * 0.5;
-            let sy = gy as f32 * cell + cell * 0.5;
-            let (wx, wy) = cam.screen_to_world(sx, sy);
-            let c = storm.coverage_at(wx, wy, zones);
-            if c <= 0.03 {
-                continue;
-            }
-            let mut lit = 0.0_f32;
-            for &(fx, fy, inten, rad) in &storm.flashes {
-                if inten <= 0.01 {
-                    continue;
-                }
-                let dx = wx - fx;
-                let dy = wy - fy;
-                let fall = (-(dx * dx + dy * dy) / (rad * rad).max(1.0)).exp();
-                lit = lit.max(inten * fall);
-            }
-            lit = (lit * c).clamp(0.0, 1.5);
-            let a = ((55.0 + c * 175.0) * (1.0 + lit * 0.35)).min(255.0) as u8;
-            let r = ((95.0 + c * 85.0) + lit * 80.0).min(255.0) as u8;
-            let g = ((92.0 + c * 90.0) + lit * 85.0).min(255.0) as u8;
-            let b = ((118.0 + c * 75.0) + lit * 90.0).min(255.0) as u8;
-            draw_rectangle(
-                gx as f32 * cell,
-                gy as f32 * cell,
-                cell + 1.0,
-                cell + 1.0,
-                Color::from_rgba(r, g, b, a),
-            );
-        }
-    }
+    // Shader missing (common on some Windows GL drivers). NEVER draw tens of thousands of
+    // CPU mosaic rects — that tanks FPS to ~10–15. One fullscreen tint only.
+    draw_rectangle(
+        0.0,
+        0.0,
+        screen_width(),
+        screen_height(),
+        Color::from_rgba(32, 36, 52, 140),
+    );
+    let _ = (zones, cam);
 }
 
 fn draw_world_lighting(app: &App) {
