@@ -34,12 +34,13 @@ pub enum NetEvent {
     JoinFailed { reason: String },
     PeerHello,
     PlaceRequest {
+        owner: u8,
         kind: BuildingKind,
         x: f32,
         y: f32,
         facing: Facing,
     },
-    RemoveRequest { id: u32 },
+    RemoveRequest { owner: u8, id: u32 },
     MoveRequest { id: u32, x: f32, y: f32 },
     RotateRequest { id: u32, facing: Facing },
     LinkRequest {
@@ -60,6 +61,8 @@ pub enum NetEvent {
         dx: f32,
         dy: f32,
         dfacing: f32,
+        dvx: f32,
+        dvy: f32,
     },
     PeerPlace {
         id: u32,
@@ -81,6 +84,10 @@ pub enum NetEvent {
     SnapBegin,
     SnapEnd,
     PeerGone { id: u8 },
+    /// Authoritative inventory snapshot for a player (ore|ingot counts).
+    PeerInventory { id: u8, ore: u32, ingot: u32 },
+    /// Local client was kicked by the host.
+    Kicked,
     Info(String),
 }
 
@@ -98,6 +105,8 @@ pub enum NetCommand {
         dx: f32,
         dy: f32,
         dfacing: f32,
+        dvx: f32,
+        dvy: f32,
     },
     Place {
         id: u32,
@@ -129,6 +138,10 @@ pub enum NetCommand {
     },
     SnapBegin,
     SnapEnd,
+    /// Broadcast (or host→all) inventory for `id`.
+    SetInventory { id: u8, ore: u32, ingot: u32 },
+    /// Host-only: disconnect a player.
+    Kick { id: u8 },
 }
 
 pub struct NetHandle {
@@ -470,6 +483,16 @@ fn parse_peer(raw: &str, local_id: u8, is_host: bool, ev: &Sender<NetEvent>) {
             } else {
                 0.0
             };
+            let dvx = if p.len() >= 12 {
+                p[10].parse().unwrap_or(0.0)
+            } else {
+                0.0
+            };
+            let dvy = if p.len() >= 12 {
+                p[11].parse().unwrap_or(0.0)
+            } else {
+                0.0
+            };
             let _ = ev.send(NetEvent::PeerCursor {
                 id,
                 x: p[2].parse().unwrap_or(0.0),
@@ -480,6 +503,8 @@ fn parse_peer(raw: &str, local_id: u8, is_host: bool, ev: &Sender<NetEvent>) {
                 dx,
                 dy,
                 dfacing,
+                dvx,
+                dvy,
             });
         }
         Some("PREQ") if p.len() >= 6 && is_host => {
@@ -489,6 +514,7 @@ fn parse_peer(raw: &str, local_id: u8, is_host: bool, ev: &Sender<NetEvent>) {
             }
             if let Some(kind) = BuildingKind::from_u8(p[2].parse().unwrap_or(255)) {
                 let _ = ev.send(NetEvent::PlaceRequest {
+                    owner,
                     kind,
                     x: p[3].parse().unwrap_or(0.0),
                     y: p[4].parse().unwrap_or(0.0),
@@ -502,7 +528,7 @@ fn parse_peer(raw: &str, local_id: u8, is_host: bool, ev: &Sender<NetEvent>) {
                 return;
             }
             if let Ok(id) = p[2].parse() {
-                let _ = ev.send(NetEvent::RemoveRequest { id });
+                let _ = ev.send(NetEvent::RemoveRequest { owner, id });
             }
         }
         Some("MREQ") if p.len() >= 5 && is_host => {
@@ -629,6 +655,23 @@ fn parse_peer(raw: &str, local_id: u8, is_host: bool, ev: &Sender<NetEvent>) {
                 }
             }
         }
+        Some("INV") if p.len() >= 4 => {
+            let id = p[1].parse().unwrap_or(255);
+            let _ = ev.send(NetEvent::PeerInventory {
+                id,
+                ore: p[2].parse().unwrap_or(0),
+                ingot: p[3].parse().unwrap_or(0),
+            });
+        }
+        Some("KICK") if p.len() >= 2 => {
+            let target = p[1].parse().unwrap_or(255);
+            if target == local_id && !is_host {
+                let _ = ev.send(NetEvent::Kicked);
+            } else if target != local_id {
+                let _ = ev.send(NetEvent::PeerGone { id: target });
+                let _ = ev.send(NetEvent::Info(format!("Player {target} was kicked")));
+            }
+        }
         _ => {}
     }
 }
@@ -648,6 +691,8 @@ fn encode_cmd(local_id: u8, is_host: bool, cmd: &NetCommand) -> Option<String> {
             dx,
             dy,
             dfacing,
+            dvx,
+            dvy,
         } => encode(&[
             "CUR",
             &local_id.to_string(),
@@ -659,6 +704,8 @@ fn encode_cmd(local_id: u8, is_host: bool, cmd: &NetCommand) -> Option<String> {
             &format!("{dx:.2}"),
             &format!("{dy:.2}"),
             &format!("{dfacing:.3}"),
+            &format!("{dvx:.2}"),
+            &format!("{dvy:.2}"),
         ]),
         NetCommand::Place {
             id,
@@ -771,6 +818,19 @@ fn encode_cmd(local_id: u8, is_host: bool, cmd: &NetCommand) -> Option<String> {
                 ])
             }
         }
+        NetCommand::SetInventory { id, ore, ingot } => encode(&[
+            "INV",
+            &id.to_string(),
+            &ore.to_string(),
+            &ingot.to_string(),
+        ]),
+        NetCommand::Kick { id } => {
+            if is_host {
+                encode(&["KICK", &id.to_string()])
+            } else {
+                return None;
+            }
+        }
     })
 }
 
@@ -790,7 +850,7 @@ async fn run_session(
             addr: "starting…".into(),
         });
         let _ = ev_tx.send(NetEvent::Info(
-            "Code ready — finishing P2P setup in background…".into(),
+            "Code ready — finishing setup…".into(),
         ));
     }
 
@@ -803,7 +863,7 @@ async fn run_session(
         Ok(ep) => ep,
         Err(e) => {
             let _ = ev_tx.send(NetEvent::JoinFailed {
-                reason: format!("iroh bind failed: {e}"),
+                reason: format!("network bind failed: {e}"),
             });
             return;
         }
@@ -815,14 +875,14 @@ async fn run_session(
         .spawn();
 
     // Don't hang forever on relay — publish with whatever addrs we have, refresh later.
-    let _ = ev_tx.send(NetEvent::Info("Connecting to iroh relay…".into()));
+    let _ = ev_tx.send(NetEvent::Info("Connecting…".into()));
     match tokio::time::timeout(Duration::from_secs(6), endpoint.online()).await {
         Ok(()) => {
-            let _ = ev_tx.send(NetEvent::Info("Relay connected — publishing join ticket…".into()));
+            let _ = ev_tx.send(NetEvent::Info("Online — sharing session…".into()));
         }
         Err(_) => {
             let _ = ev_tx.send(NetEvent::Info(
-                "Relay slow — publishing join ticket anyway…".into(),
+                "Still connecting — sharing session anyway…".into(),
             ));
         }
     }
@@ -859,10 +919,10 @@ async fn run_session(
                 });
                 let _ = ev_tx.send(NetEvent::HostReady {
                     code: code.clone(),
-                    addr: "iroh P2P · joinable".into(),
+                    addr: "Ready for friends".into(),
                 });
                 let _ = ev_tx.send(NetEvent::Info(
-                    "Join ticket live — friends can connect now.".into(),
+                    "Session live — friends can join with your code".into(),
                 ));
                 Some(stop_beacon)
             }
@@ -907,7 +967,7 @@ async fn run_session(
         let _ = ev_tx.send(NetEvent::Joined {
             player_id: local_id,
         });
-        let _ = ev_tx.send(NetEvent::Info("Joined via iroh — syncing…".into()));
+        let _ = ev_tx.send(NetEvent::Info("Connected — syncing world…".into()));
     }
 
     let hello = encode(&[
@@ -986,7 +1046,8 @@ async fn run_session(
                 }
 
                 if let Some(cmd) = latest_cursor {
-                    if last_cursor_send.elapsed() >= Duration::from_millis(20) {
+                    // Match game UPS (60 Hz) — coalesce still keeps one sample per wake.
+                    if last_cursor_send.elapsed() >= Duration::from_millis(16) {
                         if let Some(msg) = encode_cmd(local_id, is_host, &cmd) {
                             let _ = sender.broadcast(Bytes::from(msg)).await;
                             last_cursor_send = Instant::now();

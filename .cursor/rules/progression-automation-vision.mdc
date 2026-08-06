@@ -1,0 +1,47 @@
+---
+description: Game vision — Factorio/DSP-like progression and automation
+alwaysApply: true
+---
+
+# FactoryPlanner — progression & automation vision
+
+## North star
+
+The game should feel **mostly Factorio** in depth/complexity and **Dyson Sphere Program** in construction flow. The player goal is to **progress and automate**, not to micromanage a character loadout.
+
+Reference blend:
+- **Factorio:** recipes, inventories, belts/logistics depth, tech/progression, “automate the next bottleneck.”
+- **Dyson Sphere Program:** build/construction menu, place buildings by spending materials, scale toward a mega goal.
+- **Not a clone:** keep FactoryPlanner’s identity (drone, storm pocket, node/belt feel) — borrow systems, don’t copy UI 1:1.
+
+## Inventory & building (canonical)
+
+Prefer **DSP-like construction + Factorio item economy**:
+
+1. **Inventory** holds resources / intermediates / products (stacks, counts).
+2. **Build menu + hotbar** select *what to place* (catalog / shortcuts).
+3. **Placing a building spends recipe materials from inventory** (not “craft building item first, then place” as the default).
+4. **Assemblers / machines** craft *items* into inventories/chests for progression — they feed the economy; they are not a second build menu.
+5. Hotbar = quick-select placeables (and later tools/ammo); it is not the only way to unlock buildings.
+
+Avoid making Factorio’s “craft every pole into inventory before place” the core loop unless explicitly requested later (e.g. as an advanced/logistic bot mode).
+
+## Progression pillars (build toward)
+
+When adding systems, ask: does this enable **research → new recipes → more automation → scale**?
+
+Typical layering (implement when ready, MP-aware):
+- Resource gathering & smelting
+- Logistics (belts, splitters, boxes — already started)
+- Power tiers
+- Inventory + placement costs
+- Tech / research unlocks
+- Assemblers & intermediate products
+- Deeper logistics / bots later
+- Long-term mega goal (DSP-like), themed to this world (storm / totems / etc.)
+
+## Multiplayer
+
+World economy and placement costs are **shared world state**: host-authoritative spend/place, sync inventories that matter for shared factories, snapshots/saves include item state as it appears.
+
+Local-only: UI layout, build-menu search, camera.

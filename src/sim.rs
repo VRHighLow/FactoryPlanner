@@ -2,18 +2,25 @@
 
 use std::collections::{HashMap, HashSet, VecDeque};
 
-pub use crate::belts::{snap_building_xy, tile_origin, world_to_tile, BeltGrid, TILE_SIZE};
+use crate::content::{self, content, TechState};
+use crate::recipes::{self, MachineKind, Recipe};
+
+pub use crate::belts::{
+    snap_building_xy_size, tile_origin, world_to_tile, BeltGrid, TILE_SIZE,
+};
 
 pub const ORE_RATE: f32 = 7.3;
-pub const SMELT_RATE: f32 = 3.9;
 pub const SOLAR_POWER: f32 = 12.0;
 pub const ORE_POWER_DRAW: f32 = 4.0;
-pub const SMELT_POWER_DRAW: f32 = 8.0;
 pub const TURRET_POWER_DRAW: f32 = 5.0;
 pub const NODE_BUFFER: f32 = 100.0;
 pub const POLE_RADIUS: f32 = 260.0;
 /// Max Manhattan reach for a power wire — place poles for longer runs.
 pub const POWER_WIRE_MAX_REACH: f32 = 420.0;
+/// Snap cursor to an energy port within this radius when starting/ending a wire.
+pub const WIRE_PORT_SNAP: f32 = 32.0;
+/// Hit half-width for erasing routed wires.
+pub const WIRE_PATH_HIT: f32 = 12.0;
 /// Factorio-style copper budget per energy socket.
 pub const MAX_POWER_LINKS_PER_PORT: usize = 5;
 pub const TOTEM_CLEAR_RADIUS: f32 = 1000.0;
@@ -51,8 +58,17 @@ pub const FOG_BLOT_LIFE: f32 = 4.5;
 pub const FOG_BLOT_DAMAGE: f32 = 8.0;
 pub const FOG_BLOT_TICK: f32 = 0.55;
 pub const TURRET_RANGE: f32 = 340.0;
-pub const TURRET_FIRE_INTERVAL: f32 = 0.4;
-pub const TURRET_DAMAGE: f32 = 18.0;
+/// Seconds to fully charge a bolt while locked on target.
+pub const TURRET_CHARGE_TIME: f32 = 1.65;
+/// Recovery after each shot before charging can resume.
+pub const TURRET_FIRE_INTERVAL: f32 = 0.85;
+pub const TURRET_DAMAGE: f32 = 52.0;
+/// Gun turn speed (rad/s) — deliberate charge-cannon tracking.
+pub const TURRET_TURN_RATE: f32 = 1.55;
+/// Must be aimed this close (radians) before charging starts.
+pub const TURRET_AIM_LOCK: f32 = 0.09;
+/// Visual bolt lifetime.
+pub const TURRET_SHOT_LIFE: f32 = 0.55;
 /// Hard clear scale must match main.rs STORM_HARD_CLEAR_SCALE for nest activation.
 pub const CLEAR_HARD_SCALE: f32 = 0.72;
 /// Click / collision half-width for physical conveyor corridors.
@@ -63,17 +79,102 @@ pub fn building_max_hp(kind: BuildingKind) -> f32 {
         BuildingKind::Totem => 160.0,
         BuildingKind::PowerPole => 70.0,
         BuildingKind::Solar => 90.0,
-        BuildingKind::Turret => 130.0,
+        BuildingKind::Turret | BuildingKind::BallisticTurret | BuildingKind::LaserTurret => 130.0,
+        BuildingKind::Wall => 200.0,
+        BuildingKind::ReinforcedWall => 320.0,
         BuildingKind::PowerWire => 40.0,
         BuildingKind::Conveyor => 55.0,
+        BuildingKind::Nexus | BuildingKind::NexusSite => 500.0,
         _ => 110.0,
     }
 }
 
-#[derive(Clone, Copy, PartialEq, Eq, Debug, Hash)]
-pub enum Item {
-    IronOre,
-    IronIngot,
+/// Interned content item id (legacy slots 0..23 preserved for saves).
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Hash, Default)]
+pub struct Item(pub u16);
+
+#[allow(non_upper_case_globals)]
+impl Item {
+    pub const IronOre: Item = Item(0);
+    pub const IronIngot: Item = Item(1);
+    pub const CopperOre: Item = Item(2);
+    pub const Stone: Item = Item(3);
+    pub const Coal: Item = Item(4);
+    pub const CrudeOil: Item = Item(5);
+    pub const CopperIngot: Item = Item(6);
+    pub const Slag: Item = Item(7);
+    pub const Coke: Item = Item(8);
+    pub const Gear: Item = Item(9);
+    pub const Wire: Item = Item(10);
+    pub const Rivet: Item = Item(11);
+    pub const Brick: Item = Item(12);
+    pub const Pipe: Item = Item(13);
+    pub const Frame: Item = Item(14);
+    pub const CircuitShard: Item = Item(15);
+    pub const BeltLink: Item = Item(16);
+    pub const PoleKit: Item = Item(17);
+    pub const SolarCell: Item = Item(18);
+    pub const ShellCasing: Item = Item(19);
+    pub const ChargeCell: Item = Item(20);
+    pub const TotemCore: Item = Item(21);
+    pub const ScienceRed: Item = Item(22);
+    pub const ScienceGreen: Item = Item(23);
+
+    /// Legacy closed set size (pre–Era 1 pack). Prefer [`Item::count`].
+    pub const COUNT: usize = 24;
+
+    pub const ALL: &'static [Item] = &[
+        Self::IronOre,
+        Self::IronIngot,
+        Self::CopperOre,
+        Self::Stone,
+        Self::Coal,
+        Self::CrudeOil,
+        Self::CopperIngot,
+        Self::Slag,
+        Self::Coke,
+        Self::Gear,
+        Self::Wire,
+        Self::Rivet,
+        Self::Brick,
+        Self::Pipe,
+        Self::Frame,
+        Self::CircuitShard,
+        Self::BeltLink,
+        Self::PoleKit,
+        Self::SolarCell,
+        Self::ShellCasing,
+        Self::ChargeCell,
+        Self::TotemCore,
+        Self::ScienceRed,
+        Self::ScienceGreen,
+    ];
+
+    pub fn count() -> usize {
+        content::try_content()
+            .map(|c| c.item_count().max(Self::COUNT))
+            .unwrap_or(Self::COUNT)
+    }
+
+    pub fn as_u8(self) -> u8 {
+        self.0.min(255) as u8
+    }
+
+    pub fn as_u16(self) -> u16 {
+        self.0
+    }
+
+    pub fn from_u8(v: u8) -> Self {
+        Item(v as u16)
+    }
+
+    pub fn from_u16(v: u16) -> Self {
+        Item(v)
+    }
+
+    pub fn is_fluid(self) -> bool {
+        content().is_fluid(self)
+    }
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -119,16 +220,19 @@ pub enum BuildCategory {
     Storage,
     Transport,
     Defense,
+    /// Free spawn tools for combat testing.
+    Debug,
 }
 
 impl BuildCategory {
-    pub const ALL: [BuildCategory; 6] = [
+    pub const ALL: [BuildCategory; 7] = [
         Self::Energy,
         Self::Resource,
         Self::Processing,
         Self::Storage,
         Self::Transport,
         Self::Defense,
+        Self::Debug,
     ];
     pub fn label(self) -> &'static str {
         match self {
@@ -138,6 +242,7 @@ impl BuildCategory {
             Self::Storage => "Storage",
             Self::Transport => "Transport",
             Self::Defense => "Defense",
+            Self::Debug => "Debug",
         }
     }
 }
@@ -148,14 +253,34 @@ pub enum BuildingKind {
     PowerPole,
     OreNode,
     Smelter,
+    /// Crafts Assemble recipes from the recipe registry.
+    Assembler,
     Box,
     Splitter,
     Totem,
+    /// Charge Cannon (energy prototype).
     Turret,
     /// Physical power cable between ports — connection tool in the build menu.
     PowerWire,
     /// Physical conveyor between ports — connection tool in the build menu.
     Conveyor,
+    /// Generic Era 1 machine — `Node.machine_id` selects the def.
+    Machine,
+    Lab,
+    FluidTank,
+    Pipe,
+    Wall,
+    ReinforcedWall,
+    BallisticTurret,
+    LaserTurret,
+    NexusSite,
+    Nexus,
+    // --- Debug spawn tools (not real buildings) ---
+    SpawnAssault,
+    SpawnHunter,
+    SpawnSaboteur,
+    SpawnFogcaller,
+    SpawnNest,
 }
 
 impl BuildingKind {
@@ -163,36 +288,34 @@ impl BuildingKind {
         match self {
             Self::Solar | Self::PowerPole | Self::Totem | Self::PowerWire => BuildCategory::Energy,
             Self::OreNode => BuildCategory::Resource,
-            Self::Smelter => BuildCategory::Processing,
-            Self::Box => BuildCategory::Storage,
-            Self::Splitter | Self::Conveyor => BuildCategory::Transport,
-            Self::Turret => BuildCategory::Defense,
+            Self::Smelter
+            | Self::Assembler
+            | Self::Machine
+            | Self::Lab
+            | Self::NexusSite
+            | Self::Nexus => BuildCategory::Processing,
+            Self::Box | Self::FluidTank => BuildCategory::Storage,
+            Self::Splitter | Self::Conveyor | Self::Pipe => BuildCategory::Transport,
+            Self::Turret
+            | Self::Wall
+            | Self::ReinforcedWall
+            | Self::BallisticTurret
+            | Self::LaserTurret => BuildCategory::Defense,
+            Self::SpawnAssault
+            | Self::SpawnHunter
+            | Self::SpawnSaboteur
+            | Self::SpawnFogcaller
+            |             Self::SpawnNest => BuildCategory::Debug,
         }
     }
-    pub fn in_category(cat: BuildCategory) -> Vec<BuildingKind> {
-        Self::ALL
-            .into_iter()
-            .filter(|k| k.category() == cat)
-            .collect()
-    }
 
-    /// Placeable buildings + connection tools shown in the build menu / hotbar.
-    pub const ALL: [BuildingKind; 10] = [
-        Self::Solar,
-        Self::PowerPole,
-        Self::OreNode,
-        Self::Smelter,
-        Self::Box,
-        Self::Splitter,
-        Self::Totem,
-        Self::Turret,
-        Self::PowerWire,
-        Self::Conveyor,
+    pub const DEBUG_TOOLS: [BuildingKind; 5] = [
+        Self::SpawnAssault,
+        Self::SpawnHunter,
+        Self::SpawnSaboteur,
+        Self::SpawnFogcaller,
+        Self::SpawnNest,
     ];
-
-    pub fn all() -> &'static [BuildingKind] {
-        &Self::ALL
-    }
 
     /// Connection tool: selected to link energy ports (not placed as a ground building).
     pub fn is_cable(self) -> bool {
@@ -202,6 +325,18 @@ impl BuildingKind {
     /// Placeable belt tiles (Factorio-style), painted on the grid.
     pub fn is_belt_tool(self) -> bool {
         matches!(self, Self::Conveyor)
+    }
+
+    /// Free combat testing spawners (build menu Debug category).
+    pub fn is_debug_tool(self) -> bool {
+        matches!(
+            self,
+            Self::SpawnAssault
+                | Self::SpawnHunter
+                | Self::SpawnSaboteur
+                | Self::SpawnFogcaller
+                | Self::SpawnNest
+        )
     }
 
     /// Case-insensitive substring match against full and short names.
@@ -219,14 +354,32 @@ impl BuildingKind {
         match self {
             Self::Solar => "Generates power for the grid.",
             Self::PowerPole => "Distributes power in a radius.",
-            Self::OreNode => "Mines ore. Requires power.",
-            Self::Smelter => "Smelts ore into ingots. Requires power.",
+            Self::OreNode => "Mining drill — place on a revealed vein. Yield % shared by taps.",
+            Self::Smelter => "Legacy smelter — also runs Era thermal recipes when unlocked.",
+            Self::Assembler => "Legacy assembler — Era assembly recipes when unlocked.",
+            Self::Machine => "Generic Era 1 crafter — pick a machine recipe category at place.",
+            Self::Lab => "Consumes science data packs to research technologies.",
             Self::Box => "Stores items from belts.",
+            Self::FluidTank => "Stores fluids from pipes / machine fluid ports.",
             Self::Splitter => "Belt splitter — 3 wide. Alternates output evenly.",
+            Self::Pipe => "Moves fluids between tanks and machine fluid ports.",
             Self::Totem => "Powered clear zone — shelters builds and reveals nests.",
-            Self::Turret => "Auto-fires at raiders and nests. Requires power.",
-            Self::PowerWire => "Select, then click two energy ports to connect.",
+            Self::Wall => "Blocks raider pathing. Cheap early defense.",
+            Self::ReinforcedWall => "Harder wall for mid-threat evolution tiers.",
+            Self::BallisticTurret => "Ammo-fed ballistic turret. Needs standard ammunition.",
+            Self::Turret => "Charge Cannon — energy prototype. Mid/late defense.",
+            Self::LaserTurret => "Laser turret — needs optical silicon tech + power.",
+            Self::NexusSite => "Multi-stage construction site for the Planetary Nexus.",
+            Self::Nexus => "Planetary Fabrication Nexus — Era 1 victory landmark.",
+            Self::PowerWire => {
+                "Click ◆ port, click to place corner anchors, click ◆ port to finish. RMB undo/erase."
+            }
             Self::Conveyor => "Drag to paint belt tiles. R rotates. Loops sideload to change lanes.",
+            Self::SpawnAssault => "DEBUG — spawn an assault raider at the cursor. Free.",
+            Self::SpawnHunter => "DEBUG — spawn a hunter (prefers cannons). Free.",
+            Self::SpawnSaboteur => "DEBUG — spawn a saboteur (prefers power). Free.",
+            Self::SpawnFogcaller => "DEBUG — spawn a fogcaller (storm blot on death). Free.",
+            Self::SpawnNest => "DEBUG — spawn an active nest that can launch waves. Free.",
         }
     }
 
@@ -234,28 +387,60 @@ impl BuildingKind {
         match self {
             Self::Solar => "Solar Panel",
             Self::PowerPole => "Power Pole",
-            Self::OreNode => "Iron Ore Node",
+            Self::OreNode => "Mining Drill",
             Self::Smelter => "Smelter",
+            Self::Assembler => "Assembler",
+            Self::Machine => "Era Crafter",
+            Self::Lab => "Research Lab",
             Self::Box => "Storage Box",
+            Self::FluidTank => "Fluid Tank",
             Self::Splitter => "Splitter",
+            Self::Pipe => "Fluid Pipe",
             Self::Totem => "Storm Totem",
-            Self::Turret => "Gun Turret",
+            Self::Wall => "Wall",
+            Self::ReinforcedWall => "Reinforced Wall",
+            Self::BallisticTurret => "Ballistic Turret",
+            Self::Turret => "Charge Cannon",
+            Self::LaserTurret => "Laser Turret",
+            Self::NexusSite => "Nexus Construction Site",
+            Self::Nexus => "Planetary Nexus",
             Self::PowerWire => "Power Wire",
             Self::Conveyor => "Conveyor",
+            Self::SpawnAssault => "Spawn Assault",
+            Self::SpawnHunter => "Spawn Hunter",
+            Self::SpawnSaboteur => "Spawn Saboteur",
+            Self::SpawnFogcaller => "Spawn Fogcaller",
+            Self::SpawnNest => "Spawn Nest",
         }
     }
     pub fn short(self) -> &'static str {
         match self {
             Self::Solar => "Solar",
             Self::PowerPole => "Pole",
-            Self::OreNode => "Ore",
+            Self::OreNode => "Drill",
             Self::Smelter => "Smelt",
+            Self::Assembler => "Asm",
+            Self::Machine => "Craft",
+            Self::Lab => "Lab",
             Self::Box => "Box",
+            Self::FluidTank => "Tank",
             Self::Splitter => "Split",
+            Self::Pipe => "Pipe",
             Self::Totem => "Totem",
-            Self::Turret => "Turret",
+            Self::Wall => "Wall",
+            Self::ReinforcedWall => "RWall",
+            Self::BallisticTurret => "Ballistic",
+            Self::Turret => "Cannon",
+            Self::LaserTurret => "Laser",
+            Self::NexusSite => "NSite",
+            Self::Nexus => "Nexus",
             Self::PowerWire => "Wire",
             Self::Conveyor => "Belt",
+            Self::SpawnAssault => "Assault",
+            Self::SpawnHunter => "Hunter",
+            Self::SpawnSaboteur => "Saboteur",
+            Self::SpawnFogcaller => "Fogcall",
+            Self::SpawnNest => "Nest",
         }
     }
     pub fn size(self) -> (f32, f32) {
@@ -264,22 +449,60 @@ impl BuildingKind {
             Self::PowerPole => (40.0, 80.0),
             Self::Splitter => (40.0, 120.0), // 1 deep × 3 wide (rotated with facing)
             Self::Totem => (80.0, 120.0),
-            Self::Turret => (80.0, 80.0),
+            Self::Turret | Self::BallisticTurret | Self::LaserTurret => (80.0, 80.0),
+            Self::Wall | Self::ReinforcedWall => (40.0, 40.0),
             Self::Solar => (160.0, 120.0),
             Self::OreNode => (120.0, 120.0),
-            Self::Smelter => (160.0, 120.0),
-            Self::Box => (120.0, 120.0),
+            Self::Smelter | Self::Assembler | Self::Machine | Self::Lab => (160.0, 120.0),
+            Self::Box | Self::FluidTank => (120.0, 120.0),
+            Self::Pipe => (40.0, 40.0),
+            Self::NexusSite => (200.0, 200.0),
+            Self::Nexus => (400.0, 400.0),
             // Wire is a link tool; conveyor is a tile brush (no building AABB).
             Self::PowerWire | Self::Conveyor => (40.0, 40.0),
+            Self::SpawnAssault
+            | Self::SpawnHunter
+            | Self::SpawnSaboteur
+            | Self::SpawnFogcaller
+            | Self::SpawnNest => (40.0, 40.0),
         }
     }
     pub fn needs_power(self) -> bool {
-        matches!(self, Self::OreNode | Self::Smelter | Self::Totem | Self::Turret)
+        matches!(
+            self,
+            Self::OreNode
+                | Self::Smelter
+                | Self::Assembler
+                | Self::Machine
+                | Self::Lab
+                | Self::Totem
+                | Self::Turret
+                | Self::BallisticTurret
+                | Self::LaserTurret
+                | Self::NexusSite
+                | Self::FluidTank
+        )
     }
     pub fn can_rotate(self) -> bool {
         !matches!(
             self,
-            Self::PowerPole | Self::Totem | Self::Turret | Self::PowerWire | Self::Conveyor
+            Self::PowerPole
+                | Self::Totem
+                | Self::Turret
+                | Self::BallisticTurret
+                | Self::LaserTurret
+                | Self::Wall
+                | Self::ReinforcedWall
+                | Self::Nexus
+                | Self::NexusSite
+                | Self::PowerWire
+                | Self::Conveyor
+                | Self::Pipe
+                | Self::SpawnAssault
+                | Self::SpawnHunter
+                | Self::SpawnSaboteur
+                | Self::SpawnFogcaller
+                | Self::SpawnNest
         )
     }
     pub fn as_u8(self) -> u8 {
@@ -294,6 +517,22 @@ impl BuildingKind {
             Self::Turret => 7,
             Self::PowerWire => 8,
             Self::Conveyor => 9,
+            Self::SpawnAssault => 10,
+            Self::SpawnHunter => 11,
+            Self::SpawnSaboteur => 12,
+            Self::SpawnFogcaller => 13,
+            Self::SpawnNest => 14,
+            Self::Assembler => 15,
+            Self::Machine => 16,
+            Self::Lab => 17,
+            Self::FluidTank => 18,
+            Self::Pipe => 19,
+            Self::Wall => 20,
+            Self::ReinforcedWall => 21,
+            Self::BallisticTurret => 22,
+            Self::LaserTurret => 23,
+            Self::NexusSite => 24,
+            Self::Nexus => 25,
         }
     }
     pub fn from_u8(v: u8) -> Option<Self> {
@@ -308,8 +547,41 @@ impl BuildingKind {
             7 => Self::Turret,
             8 => Self::PowerWire,
             9 => Self::Conveyor,
+            10 => Self::SpawnAssault,
+            11 => Self::SpawnHunter,
+            12 => Self::SpawnSaboteur,
+            13 => Self::SpawnFogcaller,
+            14 => Self::SpawnNest,
+            15 => Self::Assembler,
+            16 => Self::Machine,
+            17 => Self::Lab,
+            18 => Self::FluidTank,
+            19 => Self::Pipe,
+            20 => Self::Wall,
+            21 => Self::ReinforcedWall,
+            22 => Self::BallisticTurret,
+            23 => Self::LaserTurret,
+            24 => Self::NexusSite,
+            25 => Self::Nexus,
             _ => return None,
         })
+    }
+
+    /// Tech gate id required to place this building (empty / basic = always).
+    pub fn tech_unlock(self) -> &'static str {
+        match self {
+            Self::OreNode => "era1_tech_basic_extraction",
+            Self::Smelter | Self::Machine => "era1_tech_basic_metallurgy",
+            Self::Assembler => "era1_tech_industrial_automation",
+            Self::Lab => "era1_tech_research_infrastructure",
+            Self::FluidTank | Self::Pipe => "era1_tech_fluid_engineering",
+            Self::Wall | Self::ReinforcedWall | Self::BallisticTurret => "era1_tech_defense_industry",
+            Self::Turret => "era1_tech_defense_research",
+            Self::LaserTurret => "era1_tech_laser_defense",
+            Self::NexusSite => "era1_tech_nexus_construction",
+            Self::Nexus => "era1_tech_era_transition",
+            _ => "era1_tech_basic_recovery",
+        }
     }
 }
 
@@ -321,19 +593,27 @@ pub enum PortKind {
     ItemIn(Item),
     AnyIn,
     AnyOut,
+    FluidIn,
+    FluidOut,
 }
 
 impl PortKind {
     pub fn is_energy(self) -> bool {
         matches!(self, Self::EnergyOut | Self::EnergyAny)
     }
+    pub fn is_fluid(self) -> bool {
+        matches!(self, Self::FluidIn | Self::FluidOut)
+    }
     /// True output (pushes power/items).
     pub fn is_output(self) -> bool {
-        matches!(self, Self::EnergyOut | Self::ItemOut(_) | Self::AnyOut)
+        matches!(
+            self,
+            Self::EnergyOut | Self::ItemOut(_) | Self::AnyOut | Self::FluidOut
+        )
     }
     /// True input (receives).
     pub fn is_input(self) -> bool {
-        matches!(self, Self::ItemIn(_) | Self::AnyIn)
+        matches!(self, Self::ItemIn(_) | Self::AnyIn | Self::FluidIn)
     }
     /// Bidirectional energy socket (poles / totems / turrets).
     pub fn is_bidirectional(self) -> bool {
@@ -370,12 +650,43 @@ pub struct Node {
     pub powered: bool,
     pub hp: f32,
     pub max_hp: f32,
-    /// Turret fire cooldown (seconds).
+    /// Turret post-shot recovery (seconds).
     pub cooldown: f32,
+    /// Turret gun aim angle (radians; 0 = north / -Y).
+    pub aim_angle: f32,
+    /// Turret charge 0..1 while locked on a target.
+    pub charge: f32,
     /// Cable endpoint ports (PowerWire / Conveyor only).
     pub cable_a: Option<(u32, usize)>,
     pub cable_b: Option<(u32, usize)>,
     pub ports: Vec<Port>,
+    /// True while the local player is dragging this building — freezes I/O.
+    pub held: bool,
+    /// Mining drill: which resource this node extracts.
+    pub mine_item: Option<Item>,
+    /// Vein this drill is tapping (`Vein.id`).
+    pub mine_vein: Option<u32>,
+    /// Box storage for non-iron solids / oil (legacy; mirrored into `stocks`).
+    pub store_copper: f32,
+    pub store_stone: f32,
+    pub store_coal: f32,
+    pub store_oil: f32,
+    /// Generic per-item buffers (dense by interned Item id).
+    pub stocks: Vec<f32>,
+    /// Mean purity 0..100 for purity-supporting items (parallel to stocks).
+    pub stock_purity: Vec<f32>,
+    /// Active craft recipe id (`0` = idle / none). Legacy shim or Era recipe index.
+    pub craft_recipe: u16,
+    /// Seconds elapsed on the current craft.
+    pub craft_t: f32,
+    /// Era machine def index when `kind == Machine` (or optional override).
+    pub machine_id: Option<u16>,
+    /// True while crafting via ContentRegistry (vs legacy recipes.rs).
+    pub era_craft: bool,
+    /// Ballistic turret ammo buffer.
+    pub ammo: f32,
+    /// Preferred fluid type for tanks/pipes (None = any).
+    pub fluid_filter: Option<Item>,
 }
 
 impl Node {
@@ -401,23 +712,157 @@ impl Node {
             hp: max_hp,
             max_hp,
             cooldown: 0.0,
+            aim_angle: facing_aim_angle(facing),
+            charge: 0.0,
             cable_a: None,
             cable_b: None,
             ports: Vec::new(),
+            held: false,
+            mine_item: None,
+            mine_vein: None,
+            store_copper: 0.0,
+            store_stone: 0.0,
+            store_coal: 0.0,
+            store_oil: 0.0,
+            stocks: vec![0.0; Item::count()],
+            stock_purity: vec![50.0; Item::count()],
+            craft_recipe: 0,
+            craft_t: 0.0,
+            machine_id: default_machine_id(kind),
+            era_craft: false,
+            ammo: 0.0,
+            fluid_filter: None,
         };
         n.rebuild_ports();
         n
     }
+
+    pub fn ensure_stock_len(&mut self) {
+        let n = Item::count();
+        if self.stocks.len() < n {
+            self.stocks.resize(n, 0.0);
+        }
+        if self.stock_purity.len() < n {
+            self.stock_purity.resize(n, 50.0);
+        }
+    }
+
+    pub fn stock(&self, item: Item) -> f32 {
+        self.stocks
+            .get(item.as_u16() as usize)
+            .copied()
+            .unwrap_or(0.0)
+    }
+
+    pub fn purity(&self, item: Item) -> f32 {
+        self.stock_purity
+            .get(item.as_u16() as usize)
+            .copied()
+            .unwrap_or(50.0)
+    }
+
+    pub fn stock_mut(&mut self, item: Item) -> &mut f32 {
+        self.ensure_stock_len();
+        let i = item.as_u16() as usize;
+        &mut self.stocks[i]
+    }
+
+    pub fn add_stock(&mut self, item: Item, amt: f32) {
+        self.add_stock_purity(item, amt, 50.0);
+    }
+
+    pub fn add_stock_purity(&mut self, item: Item, amt: f32, purity: f32) {
+        if amt <= 0.0 {
+            return;
+        }
+        self.ensure_stock_len();
+        let i = item.as_u16() as usize;
+        let old = self.stocks[i];
+        let new = (old + amt).min(NODE_BUFFER);
+        let added = new - old;
+        if added > 0.0 {
+            let p = self.stock_purity[i];
+            self.stock_purity[i] = if new > 1e-4 {
+                (p * old + purity * added) / new
+            } else {
+                purity
+            };
+        }
+        *self.stock_mut(item) = new;
+        self.sync_legacy_from_stocks();
+    }
+
+    pub fn try_take_stock(&mut self, item: Item, amt: f32) -> bool {
+        self.ensure_stock_len();
+        let slot = self.stock_mut(item);
+        if *slot + 1e-4 < amt {
+            return false;
+        }
+        *slot -= amt;
+        self.sync_legacy_from_stocks();
+        true
+    }
+
+    /// Push generic stocks into legacy iron/box fields for UI + older save paths.
+    pub fn sync_legacy_from_stocks(&mut self) {
+        self.ensure_stock_len();
+        self.in_ore = self.stocks[Item::IronOre.as_u16() as usize];
+        self.out_ingot = self.stocks[Item::IronIngot.as_u16() as usize];
+        self.store_ore = self.stocks[Item::IronOre.as_u16() as usize];
+        self.store_ingot = self.stocks[Item::IronIngot.as_u16() as usize];
+        self.store_copper = self.stocks[Item::CopperOre.as_u16() as usize];
+        self.store_stone = self.stocks[Item::Stone.as_u16() as usize];
+        self.store_coal = self.stocks[Item::Coal.as_u16() as usize];
+        self.store_oil = self.stocks[Item::CrudeOil.as_u16() as usize];
+    }
+
+    /// Pull legacy fields into stocks (load path / pre-stock code).
+    pub fn sync_stocks_from_legacy(&mut self) {
+        self.ensure_stock_len();
+        // Prefer the richer of legacy machine vs box fields for iron.
+        let ore = self.in_ore.max(self.store_ore).max(self.out_ore);
+        // out_ore is miner output — leave stocks alone for miners.
+        if self.kind != BuildingKind::OreNode {
+            self.stocks[Item::IronOre.as_u16() as usize] =
+                self.in_ore.max(self.store_ore);
+            self.stocks[Item::IronIngot.as_u16() as usize] =
+                self.out_ingot.max(self.store_ingot);
+        } else {
+            let _ = ore;
+        }
+        self.stocks[Item::CopperOre.as_u16() as usize] = self.store_copper;
+        self.stocks[Item::Stone.as_u16() as usize] = self.store_stone;
+        self.stocks[Item::Coal.as_u16() as usize] = self.store_coal;
+        self.stocks[Item::CrudeOil.as_u16() as usize] = self.store_oil;
+    }
+
     pub fn rebuild_ports(&mut self) {
         let (w, h) = self.size();
-        self.ports = ports_for(self.kind, w, h, self.facing);
+        self.ports = ports_for(self.kind, w, h, self.facing, self.mine_item);
     }
     pub fn size(&self) -> (f32, f32) {
-        let (bw, bh) = self.kind.size();
+        let (bw, bh) = self.footprint();
         match self.facing {
             Facing::E | Facing::W => (bw, bh),
             Facing::N | Facing::S => (bh, bw),
         }
+    }
+
+    /// Unrotated footprint — Era machines use data-pack tile sizes.
+    pub fn footprint(&self) -> (f32, f32) {
+        if let Some(mid) = self.machine_id {
+            if let Some(m) = content::try_content().and_then(|c| c.machine(mid)) {
+                let w = (m.size_tiles[0].max(1) as f32) * TILE_SIZE;
+                let h = (m.size_tiles[1].max(1) as f32) * TILE_SIZE;
+                return (w, h);
+            }
+        }
+        self.kind.size()
+    }
+
+    pub fn set_machine_id(&mut self, mid: Option<u16>) {
+        self.machine_id = mid;
+        self.rebuild_ports();
     }
     pub fn w(&self) -> f32 {
         self.size().0
@@ -457,7 +902,13 @@ fn edge(w: f32, h: f32, side: Facing, along: f32) -> (f32, f32) {
     }
 }
 
-fn ports_for(kind: BuildingKind, w: f32, h: f32, facing: Facing) -> Vec<Port> {
+fn ports_for(
+    kind: BuildingKind,
+    w: f32,
+    h: f32,
+    facing: Facing,
+    mine_item: Option<Item>,
+) -> Vec<Port> {
     let back = match facing {
         Facing::E => Facing::W,
         Facing::S => Facing::N,
@@ -493,34 +944,69 @@ fn ports_for(kind: BuildingKind, w: f32, h: f32, facing: Facing) -> Vec<Port> {
         BuildingKind::OreNode => {
             let (ox, oy) = edge(w, h, facing, m);
             vec![Port {
-                kind: PortKind::ItemOut(Item::IronOre),
+                kind: PortKind::ItemOut(mine_item.unwrap_or(Item::IronOre)),
                 ox,
                 oy,
             }]
         }
-        BuildingKind::Smelter => {
+        BuildingKind::Smelter
+        | BuildingKind::Assembler
+        | BuildingKind::Machine
+        | BuildingKind::Lab
+        | BuildingKind::NexusSite => {
             let i = edge(w, h, back, m);
             let o = edge(w, h, facing, m);
-            vec![
+            let mut ports = vec![
                 Port {
-                    kind: PortKind::ItemIn(Item::IronOre),
+                    kind: PortKind::AnyIn,
                     ox: i.0,
                     oy: i.1,
                 },
                 Port {
-                    kind: PortKind::ItemOut(Item::IronIngot),
+                    kind: PortKind::AnyOut,
                     ox: o.0,
                     oy: o.1,
                 },
-            ]
+            ];
+            // Fluid side ports for machines that declare fluid IO.
+            let f0 = edge(w, h, Facing::N, 0.25);
+            let f1 = edge(w, h, Facing::S, 0.25);
+            ports.push(Port {
+                kind: PortKind::FluidIn,
+                ox: f0.0,
+                oy: f0.1,
+            });
+            ports.push(Port {
+                kind: PortKind::FluidOut,
+                ox: f1.0,
+                oy: f1.1,
+            });
+            ports
         }
-        BuildingKind::Box => {
+        BuildingKind::Box | BuildingKind::FluidTank => {
             let (ox, oy) = edge(w, h, back, m);
-            vec![Port {
-                kind: PortKind::AnyIn,
-                ox,
-                oy,
-            }]
+            let kind = if matches!(kind, BuildingKind::FluidTank) {
+                PortKind::FluidIn
+            } else {
+                PortKind::AnyIn
+            };
+            vec![Port { kind, ox, oy }]
+        }
+        BuildingKind::Pipe => {
+            let a = edge(w, h, back, m);
+            let b = edge(w, h, facing, m);
+            vec![
+                Port {
+                    kind: PortKind::FluidIn,
+                    ox: a.0,
+                    oy: a.1,
+                },
+                Port {
+                    kind: PortKind::FluidOut,
+                    ox: b.0,
+                    oy: b.1,
+                },
+            ]
         }
         BuildingKind::Splitter => {
             // 3-wide belt: input on the back center, outputs on the front
@@ -546,7 +1032,7 @@ fn ports_for(kind: BuildingKind, w: f32, h: f32, facing: Facing) -> Vec<Port> {
                 },
             ]
         }
-        BuildingKind::Totem | BuildingKind::Turret => {
+        BuildingKind::Totem | BuildingKind::Turret | BuildingKind::LaserTurret => {
             let (ox, oy) = edge(w, h, facing, m);
             vec![Port {
                 kind: PortKind::EnergyAny,
@@ -554,8 +1040,53 @@ fn ports_for(kind: BuildingKind, w: f32, h: f32, facing: Facing) -> Vec<Port> {
                 oy,
             }]
         }
-        BuildingKind::PowerWire | BuildingKind::Conveyor => Vec::new(),
+        BuildingKind::BallisticTurret => {
+            let e = edge(w, h, facing, m);
+            let i = edge(w, h, back, m);
+            let ammo = content()
+                .item_index("era1_military_standard_ammunition")
+                .map(Item::from_u16)
+                .unwrap_or(Item::ShellCasing);
+            vec![
+                Port {
+                    kind: PortKind::EnergyAny,
+                    ox: e.0,
+                    oy: e.1,
+                },
+                Port {
+                    kind: PortKind::ItemIn(ammo),
+                    ox: i.0,
+                    oy: i.1,
+                },
+            ]
+        }
+        BuildingKind::Wall
+        | BuildingKind::ReinforcedWall
+        | BuildingKind::Nexus
+        | BuildingKind::PowerWire
+        | BuildingKind::Conveyor
+        | BuildingKind::SpawnAssault
+        | BuildingKind::SpawnHunter
+        | BuildingKind::SpawnSaboteur
+        | BuildingKind::SpawnFogcaller
+        | BuildingKind::SpawnNest => Vec::new(),
     }
+}
+
+fn default_machine_id(kind: BuildingKind) -> Option<u16> {
+    let id = match kind {
+        BuildingKind::Smelter => "era1_machine_thermal_smelter_mk1",
+        BuildingKind::Assembler => "era1_machine_assembler_mk1",
+        BuildingKind::Lab => "era1_machine_research_laboratory",
+        BuildingKind::Machine => "era1_machine_crusher_mk1",
+        BuildingKind::NexusSite => "era1_machine_construction_site",
+        BuildingKind::BallisticTurret => "era1_machine_ballistic_turret",
+        BuildingKind::LaserTurret => "era1_machine_laser_turret",
+        BuildingKind::Turret => "era1_machine_charge_cannon",
+        BuildingKind::FluidTank => "era1_machine_fluid_tank",
+        _ => return None,
+    };
+    content::try_content().and_then(|c| c.machine_index(id))
 }
 
 /// Manhattan path corners matching draw_power_manhattan (H → mid-X → V → H).
@@ -587,6 +1118,20 @@ pub fn dist_to_manhattan(px: f32, py: f32, ax: f32, ay: f32, bx: f32, by: f32) -
     best
 }
 
+pub fn dist_to_polyline(px: f32, py: f32, pts: &[(f32, f32)]) -> f32 {
+    if pts.is_empty() {
+        return f32::MAX;
+    }
+    if pts.len() == 1 {
+        return (px - pts[0].0).hypot(py - pts[0].1);
+    }
+    let mut best = f32::MAX;
+    for w in pts.windows(2) {
+        best = best.min(dist_point_segment(px, py, w[0].0, w[0].1, w[1].0, w[1].1));
+    }
+    best
+}
+
 #[derive(Clone, Debug)]
 pub struct Nest {
     pub id: u32,
@@ -606,6 +1151,24 @@ pub struct Nest {
     pub first_wave: bool,
     /// Went dark after clear retracted — next reveal is nastier.
     pub dormant_hate: bool,
+}
+
+impl Nest {
+    /// Named Era 1 threat ladder from evolution 0..1.
+    pub fn threat_tier(&self) -> &'static str {
+        match self.evolution {
+            e if e < 0.2 => "Scouts",
+            e if e < 0.4 => "Raiders",
+            e if e < 0.6 => "Breachers",
+            e if e < 0.8 => "Siege Pack",
+            _ => "Storm Host",
+        }
+    }
+
+    /// Extra raider HP multiplier by threat tier.
+    pub fn threat_hp_mult(&self) -> f32 {
+        1.0 + self.evolution * 1.4
+    }
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -679,6 +1242,45 @@ pub struct CombatShot {
     pub x1: f32,
     pub y1: f32,
     pub life: f32,
+    pub max_life: f32,
+    /// 0 = thin tracer, 1 = charge cannon bolt.
+    pub style: u8,
+}
+
+pub(crate) fn facing_aim_angle(facing: Facing) -> f32 {
+    match facing {
+        Facing::E => std::f32::consts::FRAC_PI_2,
+        Facing::W => -std::f32::consts::FRAC_PI_2,
+        Facing::S => std::f32::consts::PI,
+        Facing::N => 0.0,
+    }
+}
+
+pub(crate) fn aim_angle_from_dir(dx: f32, dy: f32) -> f32 {
+    dx.atan2(-dy)
+}
+
+fn angle_diff(from: f32, to: f32) -> f32 {
+    let mut d = to - from;
+    let pi = std::f32::consts::PI;
+    let tau = std::f32::consts::TAU;
+    while d > pi {
+        d -= tau;
+    }
+    while d < -pi {
+        d += tau;
+    }
+    d
+}
+
+fn rotate_toward(current: f32, target: f32, max_delta: f32) -> f32 {
+    let d = angle_diff(current, target);
+    current + d.clamp(-max_delta, max_delta)
+}
+
+fn aim_unit(angle: f32) -> (f32, f32) {
+    // 0 = north (-Y), positive clockwise toward east (+X) to match art rotation.
+    (angle.sin(), -angle.cos())
 }
 
 fn point_in_hard_clear(x: f32, y: f32, zones: &[(f32, f32, f32)]) -> bool {
@@ -744,6 +1346,8 @@ pub struct Link {
     pub to_port: usize,
     /// Physical PowerWire node created with this link.
     pub cable_id: u32,
+    /// Freehand/corner world-space route (includes endpoints). Empty → Manhattan fallback.
+    pub path: Vec<(f32, f32)>,
 }
 
 pub struct World {
@@ -751,10 +1355,11 @@ pub struct World {
     pub links: Vec<Link>,
     /// Factorio-style belt tile grid.
     pub belt_tiles: BeltGrid,
+    /// Living resource veins (pressure shared by drills).
+    pub veins: Vec<crate::deposits::Vein>,
+    pub next_vein_id: u32,
     pub next_id: u32,
     pub network_energy: HashMap<u32, f32>,
-    pub energy_prod: f32,
-    pub energy_use: f32,
     pub nests: Vec<Nest>,
     pub raiders: Vec<Raider>,
     pub combat_shots: Vec<CombatShot>,
@@ -762,6 +1367,12 @@ pub struct World {
     pub next_nest_id: u32,
     pub next_raider_id: u32,
     pub next_wave_id: u32,
+    /// Era 1 technology / Nexus campaign state.
+    pub tech: TechState,
+    /// Toast when a tech completes (UI drains).
+    pub tech_completed: Option<String>,
+    /// Milestone banner when Nexus commissions.
+    pub era1_complete: bool,
 }
 
 impl World {
@@ -770,10 +1381,10 @@ impl World {
             nodes: HashMap::new(),
             links: Vec::new(),
             belt_tiles: HashMap::new(),
+            veins: Vec::new(),
+            next_vein_id: 1,
             next_id: 1,
             network_energy: HashMap::new(),
-            energy_prod: 0.0,
-            energy_use: 0.0,
             nests: Vec::new(),
             raiders: Vec::new(),
             combat_shots: Vec::new(),
@@ -781,6 +1392,9 @@ impl World {
             next_nest_id: 1,
             next_raider_id: 1,
             next_wave_id: 1,
+            tech: TechState::default(),
+            tech_completed: None,
+            era1_complete: false,
         }
     }
 
@@ -823,6 +1437,86 @@ impl World {
         }
     }
 
+    pub fn seed_deposits(&mut self, storm_cx: f32, storm_cy: f32, storm_safe_r: f32) {
+        self.veins = crate::deposits::seed_veins(storm_cx, storm_cy, storm_safe_r);
+        self.next_vein_id = self
+            .veins
+            .iter()
+            .map(|v| v.id)
+            .max()
+            .unwrap_or(0)
+            .saturating_add(1)
+            .max(1);
+    }
+
+    pub fn vein_index(&self, id: u32) -> Option<usize> {
+        self.veins.iter().position(|v| v.id == id)
+    }
+
+    /// Best vein overlapping the footprint (highest current yield).
+    pub fn vein_under(&self, x: f32, y: f32, w: f32, h: f32) -> Option<usize> {
+        self.veins
+            .iter()
+            .enumerate()
+            .filter(|(_, v)| v.yield_pct > 1.0 && v.overlaps_rect(x, y, w, h))
+            .max_by(|a, b| {
+                a.1.yield_pct
+                    .partial_cmp(&b.1.yield_pct)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            })
+            .map(|(i, _)| i)
+    }
+
+    pub fn has_ore_under(&self, x: f32, y: f32, w: f32, h: f32) -> bool {
+        self.vein_under(x, y, w, h).is_some()
+    }
+
+    pub fn bind_miner(&mut self, id: u32) -> bool {
+        let (x, y, w, h) = match self.nodes.get(&id) {
+            Some(n) if n.kind == BuildingKind::OreNode => (n.x, n.y, n.w(), n.h()),
+            _ => return false,
+        };
+        let Some(vi) = self.vein_under(x, y, w, h) else {
+            if let Some(n) = self.nodes.get_mut(&id) {
+                n.mine_item = None;
+                n.mine_vein = None;
+                n.rebuild_ports();
+            }
+            return false;
+        };
+        let vein_id = self.veins[vi].id;
+        let item = self.veins[vi].kind.item();
+        if let Some(n) = self.nodes.get_mut(&id) {
+            n.mine_item = Some(item);
+            n.mine_vein = Some(vein_id);
+            n.rebuild_ports();
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Refresh storm clear factors + tap counts before mining.
+    pub fn refresh_veins(&mut self, clear_zones: &[(f32, f32, f32)]) {
+        for v in &mut self.veins {
+            v.taps = 0;
+            let clear = point_in_hard_clear(v.x, v.y, clear_zones);
+            // Fully open in clear; choked (not dead) under storm so overbuilt fog drills limp.
+            v.clear_factor = if clear { 1.0 } else { 0.12 };
+        }
+        let tap_ids: Vec<u32> = self
+            .nodes
+            .values()
+            .filter(|n| n.kind == BuildingKind::OreNode && !n.held)
+            .filter_map(|n| n.mine_vein)
+            .collect();
+        for vid in tap_ids {
+            if let Some(v) = self.veins.iter_mut().find(|v| v.id == vid) {
+                v.taps = v.taps.saturating_add(1);
+            }
+        }
+    }
+
     pub fn set_id_namespace(&mut self, player_id: u8) {
         let base = (player_id as u32 + 1) * 1_000_000;
         if self.next_id < base {
@@ -831,16 +1525,38 @@ impl World {
     }
 
     pub fn place_node(&mut self, kind: BuildingKind, x: f32, y: f32, facing: Facing) -> Option<u32> {
-        if kind.is_cable() || kind.is_belt_tool() {
+        self.place_node_machine(kind, None, x, y, facing)
+    }
+
+    pub fn place_node_machine(
+        &mut self,
+        kind: BuildingKind,
+        machine_id: Option<u16>,
+        x: f32,
+        y: f32,
+        facing: Facing,
+    ) -> Option<u32> {
+        if kind.is_cable() || kind.is_belt_tool() || kind.is_debug_tool() {
             return None;
         }
-        let probe = Node::new(kind, x, y, facing);
+        let mut probe = Node::new(kind, x, y, facing);
+        if let Some(mid) = machine_id {
+            probe.set_machine_id(Some(mid));
+        }
         if self.collides(probe.x, probe.y, probe.w(), probe.h(), None) {
             return None;
+        }
+        if kind == BuildingKind::OreNode {
+            if !self.has_ore_under(probe.x, probe.y, probe.w(), probe.h()) {
+                return None;
+            }
         }
         let id = self.next_id;
         self.next_id += 1;
         self.nodes.insert(id, probe);
+        if kind == BuildingKind::OreNode {
+            let _ = self.bind_miner(id);
+        }
         Some(id)
     }
 
@@ -861,6 +1577,9 @@ impl World {
         }
         // Remote sync always wins so peers converge even after local collisions.
         self.nodes.insert(id, probe);
+        if kind == BuildingKind::OreNode {
+            let _ = self.bind_miner(id);
+        }
         true
     }
 
@@ -881,7 +1600,11 @@ impl World {
         } else {
             return false;
         }
+        self.retarget_wire_path_ends(id);
         self.sync_cable_anchors();
+        if self.nodes.get(&id).map(|n| n.kind) == Some(BuildingKind::OreNode) {
+            let _ = self.bind_miner(id);
+        }
         true
     }
 
@@ -893,7 +1616,41 @@ impl World {
             n.x = x;
             n.y = y;
         }
+        self.retarget_wire_path_ends(id);
         self.sync_cable_anchors();
+    }
+
+    /// Keep routed wire endpoints glued to their ports after a building moves.
+    fn retarget_wire_path_ends(&mut self, moved_id: u32) {
+        let updates: Vec<(usize, Option<(f32, f32)>, Option<(f32, f32)>)> = self
+            .links
+            .iter()
+            .enumerate()
+            .filter(|(_, l)| {
+                !l.path.is_empty() && (l.from_node == moved_id || l.to_node == moved_id)
+            })
+            .filter_map(|(i, l)| {
+                let a = self
+                    .nodes
+                    .get(&l.from_node)
+                    .and_then(|n| n.port_world(l.from_port));
+                let b = self
+                    .nodes
+                    .get(&l.to_node)
+                    .and_then(|n| n.port_world(l.to_port));
+                Some((i, a, b))
+            })
+            .collect();
+        for (i, a, b) in updates {
+            if let Some(l) = self.links.get_mut(i) {
+                if let (Some(a), Some(first)) = (a, l.path.first_mut()) {
+                    *first = a;
+                }
+                if let (Some(b), Some(last)) = (b, l.path.last_mut()) {
+                    *last = b;
+                }
+            }
+        }
     }
 
     pub fn try_rotate_node(&mut self, id: u32) -> bool {
@@ -1111,11 +1868,46 @@ impl World {
     }
 
     pub fn hit_port(&self, wx: f32, wy: f32, radius: f32) -> Option<(u32, usize)> {
+        self.hit_port_where(wx, wy, radius, |_| true)
+    }
+
+    /// Nearest energy port within `radius`, or None.
+    pub fn nearest_energy_port(&self, wx: f32, wy: f32, radius: f32) -> Option<(u32, usize)> {
+        // Prefer energy-only scan so a closer item/fluid port doesn't steal the snap.
+        self.hit_port_where(wx, wy, radius, |p| p.kind.is_energy())
+            .or_else(|| {
+                self.hit_port(wx, wy, radius)
+                    .filter(|&(id, pi)| {
+                        self.nodes
+                            .get(&id)
+                            .and_then(|n| n.ports.get(pi))
+                            .map(|p| p.kind.is_energy())
+                            .unwrap_or(false)
+                    })
+            })
+    }
+
+    fn hit_port_where(
+        &self,
+        wx: f32,
+        wy: f32,
+        radius: f32,
+        pred: impl Fn(&Port) -> bool,
+    ) -> Option<(u32, usize)> {
         let r2 = radius * radius;
         let mut best = None;
         for (&id, n) in &self.nodes {
+            if n.kind.is_cable() || n.held {
+                continue;
+            }
             for (pi, p) in n.ports.iter().enumerate() {
-                let d2 = (n.x + p.ox - wx).powi(2) + (n.y + p.oy - wy).powi(2);
+                if !pred(p) {
+                    continue;
+                }
+                let Some((px, py)) = n.port_world(pi) else {
+                    continue;
+                };
+                let d2 = (px - wx).powi(2) + (py - wy).powi(2);
                 if d2 <= r2 && best.map(|(_, _, bd)| d2 < bd).unwrap_or(true) {
                     best = Some((id, pi, d2));
                 }
@@ -1150,7 +1942,6 @@ impl World {
         &self,
         from: (u32, usize),
         to: (u32, usize),
-        _power: bool,
     ) -> Option<&'static str> {
         match (
             self.power_connect_fail(from, to),
@@ -1159,15 +1950,6 @@ impl World {
             (None, _) | (_, None) => None,
             (Some(a), Some(b)) => Some(prefer_connect_hint(a, b)),
         }
-    }
-
-    /// Legacy no-op — belts are grid tiles now.
-    pub fn can_connect_belt(&self, _from: (u32, usize), _to: (u32, usize)) -> bool {
-        false
-    }
-
-    pub fn connect_belt(&mut self, _from: (u32, usize), _to: (u32, usize)) -> bool {
-        false
     }
 
     pub fn power_connect_fail(&self, from: (u32, usize), to: (u32, usize)) -> Option<&'static str> {
@@ -1251,11 +2033,73 @@ impl World {
             to_node: to.0,
             to_port: to.1,
             cable_id,
+            path: Vec::new(),
         });
         true
     }
 
-    pub fn tick(&mut self, dt: f32) {
+    /// Connect two energy ports with an optional cornered route.
+    pub fn connect_power_path(
+        &mut self,
+        from: (u32, usize),
+        to: (u32, usize),
+        path: Vec<(f32, f32)>,
+    ) -> bool {
+        let before = self.links.len();
+        if !self.connect_power(from, to) {
+            return false;
+        }
+        if let Some(l) = self.links.get_mut(before) {
+            l.path = path;
+        }
+        true
+    }
+
+    pub fn set_node_held(&mut self, id: u32, held: bool) {
+        if let Some(n) = self.nodes.get_mut(&id) {
+            n.held = held;
+            if held {
+                n.working = false;
+            }
+        }
+    }
+
+    /// Remove the nearest routed/manhattan power wire under the cursor.
+    pub fn remove_wire_at(&mut self, wx: f32, wy: f32) -> bool {
+        let mut best: Option<(usize, f32)> = None;
+        for (i, l) in self.links.iter().enumerate() {
+            let dist = if l.path.len() >= 2 {
+                dist_to_polyline(wx, wy, &l.path)
+            } else {
+                let Some(a) = self.nodes.get(&l.from_node) else {
+                    continue;
+                };
+                let Some(b) = self.nodes.get(&l.to_node) else {
+                    continue;
+                };
+                let Some((ax, ay)) = a.port_world(l.from_port) else {
+                    continue;
+                };
+                let Some((bx, by)) = b.port_world(l.to_port) else {
+                    continue;
+                };
+                dist_to_manhattan(wx, wy, ax, ay, bx, by)
+            };
+            if dist <= WIRE_PATH_HIT && best.map(|(_, bd)| dist < bd).unwrap_or(true) {
+                best = Some((i, dist));
+            }
+        }
+        let Some((idx, _)) = best else {
+            return false;
+        };
+        let cable_id = self.links[idx].cable_id;
+        self.links.remove(idx);
+        self.nodes.remove(&cable_id);
+        true
+    }
+
+    pub fn tick(&mut self, dt: f32, clear_zones: &[(f32, f32, f32)]) {
+        self.refresh_veins(clear_zones);
         let (node_net, gen_by_net, powered_poles) = self.power_step(dt);
         self.machine_step(dt, &node_net, &gen_by_net, &powered_poles);
         self.belt_grid_step(dt);
@@ -1551,89 +2395,143 @@ impl World {
             }
         }
 
-        let turret_ids: Vec<u32> = self
+        let turret_ids: Vec<(u32, BuildingKind)> = self
             .nodes
             .iter()
             .filter_map(|(&id, n)| {
-                if n.kind == BuildingKind::Turret && n.powered {
-                    Some(id)
+                if matches!(
+                    n.kind,
+                    BuildingKind::Turret | BuildingKind::BallisticTurret | BuildingKind::LaserTurret
+                ) && n.powered
+                {
+                    Some((id, n.kind))
                 } else {
                     None
                 }
             })
             .collect();
-        for tid in turret_ids {
-            let (tcx, tcy, mut cd) = {
+        for (tid, tkind) in turret_ids {
+            let (tcx, tcy, mut cd, mut aim, mut charge, ammo) = {
                 let Some(n) = self.nodes.get(&tid) else {
                     continue;
                 };
                 let (cx, cy) = n.center();
-                (cx, cy, n.cooldown)
+                (cx, cy, n.cooldown, n.aim_angle, n.charge, n.ammo)
             };
-            cd = (cd - dt).max(0.0);
-            if cd > 0.0 {
-                if let Some(n) = self.nodes.get_mut(&tid) {
-                    n.cooldown = cd;
-                    n.working = true;
-                }
+            if tkind == BuildingKind::BallisticTurret && ammo < 1.0 {
                 continue;
             }
+            cd = (cd - dt).max(0.0);
 
-            let range2 = TURRET_RANGE * TURRET_RANGE;
-            let mut best_raider: Option<(usize, f32)> = None;
+            let range2 = match tkind {
+                BuildingKind::LaserTurret => (TURRET_RANGE * 1.15).powi(2),
+                BuildingKind::BallisticTurret => (TURRET_RANGE * 0.9).powi(2),
+                _ => TURRET_RANGE * TURRET_RANGE,
+            };
+            let damage = match tkind {
+                BuildingKind::LaserTurret => TURRET_DAMAGE * 0.85,
+                BuildingKind::BallisticTurret => TURRET_DAMAGE * 0.55,
+                _ => TURRET_DAMAGE,
+            };
+            let charge_time = match tkind {
+                BuildingKind::BallisticTurret => 0.35,
+                BuildingKind::LaserTurret => 0.9,
+                _ => TURRET_CHARGE_TIME,
+            };
+            enum TurretTarget {
+                Raider(usize),
+                Nest(usize),
+            }
+            let mut best_d2 = f32::INFINITY;
+            let mut best: Option<(TurretTarget, f32, f32)> = None; // tgt, x, y
             for (i, r) in self.raiders.iter().enumerate() {
                 if r.hp <= 0.0 {
                     continue;
                 }
                 let d2 = (r.x - tcx).powi(2) + (r.y - tcy).powi(2);
-                if d2 <= range2 && best_raider.map(|(_, bd)| d2 < bd).unwrap_or(true) {
-                    best_raider = Some((i, d2));
+                if d2 <= range2 && d2 < best_d2 {
+                    best_d2 = d2;
+                    best = Some((TurretTarget::Raider(i), r.x, r.y));
                 }
             }
-
-            let mut shot_to: Option<(f32, f32)> = None;
-            if let Some((i, _)) = best_raider {
-                if let Some(r) = self.raiders.get_mut(i) {
-                    r.hp -= TURRET_DAMAGE;
-                    shot_to = Some((r.x, r.y));
-                }
-            } else {
-                let mut best_nest: Option<(usize, f32)> = None;
+            if best.is_none() {
                 for (i, nest) in self.nests.iter().enumerate() {
                     if nest.hp <= 0.0 || !point_in_hard_clear(nest.x, nest.y, clear_zones) {
                         continue;
                     }
                     let d2 = (nest.x - tcx).powi(2) + (nest.y - tcy).powi(2);
-                    if d2 <= range2 && best_nest.map(|(_, bd)| d2 < bd).unwrap_or(true) {
-                        best_nest = Some((i, d2));
-                    }
-                }
-                if let Some((i, _)) = best_nest {
-                    if let Some(nest) = self.nests.get_mut(i) {
-                        nest.hp -= TURRET_DAMAGE;
-                        nest.anger += 40.0;
-                        nest.wave_cd = nest.wave_cd.min(1.2);
-                        shot_to = Some((nest.x, nest.y));
+                    if d2 <= range2 && d2 < best_d2 {
+                        best_d2 = d2;
+                        best = Some((TurretTarget::Nest(i), nest.x, nest.y));
                     }
                 }
             }
 
-            if let Some(n) = self.nodes.get_mut(&tid) {
-                if shot_to.is_some() {
-                    n.cooldown = TURRET_FIRE_INTERVAL;
-                    n.working = true;
-                } else {
-                    n.cooldown = 0.0;
-                    n.working = n.powered;
+            let mut shot_to: Option<(f32, f32)> = None;
+            let had_target = best.is_some();
+            let mut muzzle = {
+                let (ux, uy) = aim_unit(aim);
+                (tcx + ux * 36.0, tcy + uy * 36.0)
+            };
+            if let Some((tgt, tx, ty)) = best {
+                let desired = aim_angle_from_dir(tx - tcx, ty - tcy);
+                aim = rotate_toward(aim, desired, TURRET_TURN_RATE * dt);
+                let (ux, uy) = aim_unit(aim);
+                muzzle = (tcx + ux * 36.0, tcy + uy * 36.0);
+                let locked = angle_diff(aim, desired).abs() <= TURRET_AIM_LOCK;
+                if locked && cd <= 0.0 {
+                    charge = (charge + dt / charge_time).min(1.0);
+                    if charge >= 1.0 {
+                        match tgt {
+                            TurretTarget::Raider(i) => {
+                                if let Some(r) = self.raiders.get_mut(i) {
+                                    r.hp -= damage;
+                                    shot_to = Some((r.x, r.y));
+                                }
+                            }
+                            TurretTarget::Nest(i) => {
+                                if let Some(nest) = self.nests.get_mut(i) {
+                                    nest.hp -= damage;
+                                    nest.anger += 40.0;
+                                    nest.wave_cd = nest.wave_cd.min(1.2);
+                                    shot_to = Some((nest.x, nest.y));
+                                }
+                            }
+                        }
+                        charge = 0.0;
+                        cd = if tkind == BuildingKind::BallisticTurret {
+                            0.28
+                        } else {
+                            TURRET_FIRE_INTERVAL
+                        };
+                        if tkind == BuildingKind::BallisticTurret {
+                            if let Some(n) = self.nodes.get_mut(&tid) {
+                                n.ammo = (n.ammo - 1.0).max(0.0);
+                            }
+                        }
+                    }
+                } else if !locked {
+                    charge = (charge - dt * 0.85).max(0.0);
                 }
+            } else {
+                charge = (charge - dt * 1.2).max(0.0);
+            }
+
+            if let Some(n) = self.nodes.get_mut(&tid) {
+                n.cooldown = cd;
+                n.aim_angle = aim;
+                n.charge = charge;
+                n.working = n.powered && (had_target || charge > 0.05 || cd > 0.0);
             }
             if let Some((x1, y1)) = shot_to {
                 self.combat_shots.push(CombatShot {
-                    x0: tcx,
-                    y0: tcy,
+                    x0: muzzle.0,
+                    y0: muzzle.1,
                     x1,
                     y1,
-                    life: 0.12,
+                    life: TURRET_SHOT_LIFE,
+                    max_life: TURRET_SHOT_LIFE,
+                    style: 1,
                 });
             }
         }
@@ -1686,11 +2584,19 @@ impl World {
             .map(|(&id, n)| (id, n.kind))
             .collect();
 
+        let evo_mult = self
+            .nests
+            .iter()
+            .find(|n| (n.x - nest_x).abs() < 1.0 && (n.y - nest_y).abs() < 1.0)
+            .map(|n| n.threat_hp_mult())
+            .unwrap_or(1.0);
+
         // Mixed composition: assault, hunters, saboteurs, fogcallers.
+        // Higher evolution → more hunters/saboteurs (mid threat needs ammo defense).
         for i in 0..count {
-            let role = match i % 6 {
-                0 | 1 | 2 => RaiderRole::Assault,
-                3 => RaiderRole::Hunter,
+            let role = match (i + (evo_mult * 3.0) as usize) % 6 {
+                0 | 1 => RaiderRole::Assault,
+                2 | 3 => RaiderRole::Hunter,
                 4 => RaiderRole::Saboteur,
                 _ => RaiderRole::Fogcaller,
             };
@@ -1702,9 +2608,9 @@ impl World {
             let id = self.next_raider_id;
             self.next_raider_id = self.next_raider_id.wrapping_add(1).max(1);
             let hp = if role == RaiderRole::Fogcaller {
-                RAIDER_HP * 1.45
+                RAIDER_HP * 1.45 * evo_mult
             } else {
-                RAIDER_HP
+                RAIDER_HP * evo_mult
             };
             self.raiders.push(Raider {
                 id,
@@ -1720,6 +2626,80 @@ impl World {
                 retarget_cd: RETARGET_INTERVAL * 0.5,
             });
         }
+    }
+
+    /// Build-menu Debug tools — spawn a single raider or nest at a world point.
+    pub fn spawn_debug_at(
+        &mut self,
+        kind: BuildingKind,
+        x: f32,
+        y: f32,
+        clear_zones: &[(f32, f32, f32)],
+    ) -> bool {
+        if kind == BuildingKind::SpawnNest {
+            let id = self.next_nest_id;
+            self.next_nest_id = self.next_nest_id.wrapping_add(1).max(1);
+            self.nests.push(Nest {
+                id,
+                x,
+                y,
+                hp: NEST_HP,
+                max_hp: NEST_HP,
+                active: true,
+                wave_cd: 2.0,
+                evolution: 0.15,
+                anger: 40.0,
+                first_wave: true,
+                dormant_hate: false,
+            });
+            return true;
+        }
+        let role = match kind {
+            BuildingKind::SpawnAssault => RaiderRole::Assault,
+            BuildingKind::SpawnHunter => RaiderRole::Hunter,
+            BuildingKind::SpawnSaboteur => RaiderRole::Saboteur,
+            BuildingKind::SpawnFogcaller => RaiderRole::Fogcaller,
+            _ => return false,
+        };
+        if self.raiders.len() >= MAX_RAIDERS {
+            return false;
+        }
+        let centers: HashMap<u32, (f32, f32)> = self
+            .nodes
+            .iter()
+            .filter(|(_, n)| !n.kind.is_cable())
+            .map(|(&id, n)| (id, n.center()))
+            .collect();
+        let kinds: HashMap<u32, BuildingKind> = self
+            .nodes
+            .iter()
+            .filter(|(_, n)| !n.kind.is_cable())
+            .map(|(&id, n)| (id, n.kind))
+            .collect();
+        let target = Self::pick_target_among(&centers, &kinds, clear_zones, x, y, role);
+        let id = self.next_raider_id;
+        self.next_raider_id = self.next_raider_id.wrapping_add(1).max(1);
+        let wave_id = self.next_wave_id;
+        self.next_wave_id = self.next_wave_id.wrapping_add(1).max(1);
+        let hp = if role == RaiderRole::Fogcaller {
+            RAIDER_HP * 1.45
+        } else {
+            RAIDER_HP
+        };
+        self.raiders.push(Raider {
+            id,
+            x,
+            y,
+            hp,
+            target_node: target,
+            attack_cd: 0.1,
+            wave_id,
+            vx: 0.0,
+            vy: 0.0,
+            role,
+            retarget_cd: 0.2,
+        });
+        true
     }
 
     fn is_defense(kind: BuildingKind) -> bool {
@@ -1815,13 +2795,10 @@ impl World {
             }
             gen_by_net.insert(root, gen);
         }
-        let mut total = 0.0;
         for (&root, &gen) in &gen_by_net {
-            total += gen;
             let e = self.network_energy.entry(root).or_insert(0.0);
             *e = (*e + gen * dt).min(2000.0);
         }
-        self.energy_prod = total;
         let mut poles = HashSet::new();
         for (&id, n) in &self.nodes {
             if n.kind != BuildingKind::PowerPole {
@@ -1873,7 +2850,6 @@ impl World {
         _gen: &HashMap<u32, f32>,
         poles: &HashSet<u32>,
     ) {
-        let mut energy_draw = 0.0;
         let mut ids: Vec<u32> = self.nodes.keys().copied().collect();
         ids.sort_unstable();
         for id in ids {
@@ -1905,26 +2881,63 @@ impl World {
             };
             let kind = self.nodes.get(&id).map(|n| n.kind);
             let powered = self.nodes.get(&id).map(|n| n.powered).unwrap_or(false);
+            let held = self.nodes.get(&id).map(|n| n.held).unwrap_or(false);
+            if held {
+                if let Some(n) = self.nodes.get_mut(&id) {
+                    n.working = false;
+                }
+                continue;
+            }
             match kind {
                 Some(BuildingKind::OreNode) if powered => {
                     if let Some(root) = pay {
                         let cost = ORE_POWER_DRAW * dt;
                         let has = self.network_energy.get(&root).copied().unwrap_or(0.0);
                         if has >= cost {
-                            if let Some(n) = self.nodes.get_mut(&id) {
-                                if n.out_ore < NODE_BUFFER {
-                                    let made = (ORE_RATE * dt).min(NODE_BUFFER - n.out_ore);
-                                    if made > 0.0 {
-                                        n.out_ore += made;
-                                        n.working = true;
-                                        if let Some(e) = self.network_energy.get_mut(&root) {
-                                            *e -= cost;
-                                        }
-                                        energy_draw += ORE_POWER_DRAW;
-                                    } else {
+                            let (out_space, mine_vein) = {
+                                let Some(n) = self.nodes.get(&id) else {
+                                    continue;
+                                };
+                                ((NODE_BUFFER - n.out_ore).max(0.0), n.mine_vein)
+                            };
+                            if mine_vein.is_none() || out_space <= 0.0 {
+                                if let Some(n) = self.nodes.get_mut(&id) {
+                                    n.working = false;
+                                }
+                            } else if let Some(vid) = mine_vein {
+                                let Some(vi) = self.vein_index(vid) else {
+                                    if let Some(n) = self.nodes.get_mut(&id) {
                                         n.working = false;
                                     }
-                                } else {
+                                    let _ = self.bind_miner(id);
+                                    continue;
+                                };
+                                if self.veins[vi].yield_pct <= 1.0 {
+                                    if let Some(n) = self.nodes.get_mut(&id) {
+                                        n.working = false;
+                                    }
+                                    let _ = self.bind_miner(id);
+                                    continue;
+                                }
+                                let rate = self.veins[vi].rate_per_tap(ORE_RATE);
+                                let want = (rate * dt).min(out_space);
+                                let purity = self.veins[vi].purity;
+                                let made = self.veins[vi].extract(want);
+                                if made > 0.0 {
+                                    if let Some(n) = self.nodes.get_mut(&id) {
+                                        n.out_ore += made;
+                                        if let Some(item) = n.mine_item {
+                                            n.add_stock_purity(item, 0.0, purity); // set purity mean
+                                            let i = item.as_u16() as usize;
+                                            n.ensure_stock_len();
+                                            n.stock_purity[i] = purity;
+                                        }
+                                        n.working = true;
+                                    }
+                                    if let Some(e) = self.network_energy.get_mut(&root) {
+                                        *e -= cost * (made / (ORE_RATE * dt).max(1e-4)).min(1.0);
+                                    }
+                                } else if let Some(n) = self.nodes.get_mut(&id) {
                                     n.working = false;
                                 }
                             }
@@ -1934,33 +2947,27 @@ impl World {
                     }
                 }
                 Some(BuildingKind::Smelter) if powered => {
-                    if let Some(root) = pay {
-                        let cost = SMELT_POWER_DRAW * dt;
-                        let has = self.network_energy.get(&root).copied().unwrap_or(0.0);
-                        if has >= cost {
-                            if let Some(n) = self.nodes.get_mut(&id) {
-                                if n.in_ore > 0.0 && n.out_ingot < NODE_BUFFER {
-                                    let can = (SMELT_RATE * dt)
-                                        .min(n.in_ore)
-                                        .min(NODE_BUFFER - n.out_ingot);
-                                    if can > 0.0 {
-                                        n.in_ore -= can;
-                                        n.out_ingot += can;
-                                        n.working = true;
-                                        if let Some(e) = self.network_energy.get_mut(&root) {
-                                            *e -= cost;
-                                        }
-                                        energy_draw += SMELT_POWER_DRAW;
-                                    } else {
-                                        n.working = false;
-                                    }
-                                } else {
-                                    n.working = false;
-                                }
-                            }
-                        } else if let Some(n) = self.nodes.get_mut(&id) {
-                            n.working = false;
-                        }
+                    if !self.step_era_crafter(id, pay, dt) {
+                        self.step_crafter(id, pay, dt, MachineKind::Smelt);
+                    }
+                }
+                Some(BuildingKind::Assembler) if powered => {
+                    if !self.step_era_crafter(id, pay, dt) {
+                        self.step_crafter(id, pay, dt, MachineKind::Assemble);
+                    }
+                }
+                Some(BuildingKind::Machine) if powered => {
+                    let _ = self.step_era_crafter(id, pay, dt);
+                }
+                Some(BuildingKind::Lab) if powered => {
+                    self.step_lab(id, pay, dt);
+                }
+                Some(BuildingKind::NexusSite) if powered => {
+                    self.step_nexus_site(id, pay, dt);
+                }
+                Some(BuildingKind::FluidTank) | Some(BuildingKind::Pipe) => {
+                    if let Some(n) = self.nodes.get_mut(&id) {
+                        n.working = n.stocks.iter().any(|&v| v > 0.05);
                     }
                 }
                 Some(BuildingKind::Splitter) => {
@@ -1968,7 +2975,11 @@ impl World {
                         n.working = n.buf_ore + n.buf_ingot > 0.05;
                     }
                 }
-                Some(BuildingKind::Turret) if powered => {
+                Some(BuildingKind::Turret)
+                | Some(BuildingKind::BallisticTurret)
+                | Some(BuildingKind::LaserTurret)
+                    if powered =>
+                {
                     if let Some(root) = pay {
                         let cost = TURRET_POWER_DRAW * dt;
                         let has = self.network_energy.get(&root).copied().unwrap_or(0.0);
@@ -1976,9 +2987,23 @@ impl World {
                             if let Some(e) = self.network_energy.get_mut(&root) {
                                 *e -= cost;
                             }
-                            energy_draw += TURRET_POWER_DRAW;
                             if let Some(n) = self.nodes.get_mut(&id) {
-                                n.working = true;
+                                // Ballistic needs ammo in buffer (fed from stocks).
+                                if n.kind == BuildingKind::BallisticTurret {
+                                    if n.ammo < 1.0 {
+                                        let ammo = Item::from_u16(
+                                            content()
+                                                .item_index("era1_military_standard_ammunition")
+                                                .unwrap_or(Item::ShellCasing.as_u16()),
+                                        );
+                                        if n.try_take_stock(ammo, 1.0) {
+                                            n.ammo += 10.0;
+                                        }
+                                    }
+                                    n.working = n.ammo >= 1.0;
+                                } else {
+                                    n.working = true;
+                                }
                             }
                         } else if let Some(n) = self.nodes.get_mut(&id) {
                             n.working = false;
@@ -1991,12 +3016,465 @@ impl World {
                         n.working = true;
                     }
                 }
+                Some(BuildingKind::Nexus) => {
+                    if let Some(n) = self.nodes.get_mut(&id) {
+                        n.working = true;
+                    }
+                    if !self.era1_complete {
+                        self.era1_complete = true;
+                        self.tech.nexus_complete = true;
+                        self.tech.era2_unlocked = true;
+                    }
+                }
                 _ => {}
             }
         }
-        self.energy_use = energy_draw;
+
+        self.step_fluid_transfer(dt);
     }
 
+    /// Transfer fluids between adjacent FluidIn/Out ports on power/item links and pipes.
+    fn step_fluid_transfer(&mut self, dt: f32) {
+        let rate = 12.0 * dt;
+        let links: Vec<(u32, usize, u32, usize)> = self
+            .links
+            .iter()
+            .map(|l| (l.from_node, l.from_port, l.to_node, l.to_port))
+            .collect();
+        for (a, ap, b, bp) in links {
+            let (Some(na), Some(nb)) = (self.nodes.get(&a), self.nodes.get(&b)) else {
+                continue;
+            };
+            let (Some(pa), Some(pb)) = (na.ports.get(ap), nb.ports.get(bp)) else {
+                continue;
+            };
+            if !(pa.kind.is_fluid() && pb.kind.is_fluid()) {
+                continue;
+            }
+            // Push from FluidOut → FluidIn
+            let (src, dst) = match (pa.kind, pb.kind) {
+                (PortKind::FluidOut, PortKind::FluidIn) => (a, b),
+                (PortKind::FluidIn, PortKind::FluidOut) => (b, a),
+                _ => continue,
+            };
+            // Move any fluid stock present.
+            let move_item = {
+                let n = self.nodes.get(&src).unwrap();
+                n.stocks
+                    .iter()
+                    .enumerate()
+                    .find(|&(i, &v)| v > 0.05 && Item::from_u16(i as u16).is_fluid())
+                    .map(|(i, _)| Item::from_u16(i as u16))
+            };
+            let Some(item) = move_item else {
+                continue;
+            };
+            // Respect destination tank/pipe lock-in filter.
+            if let Some(n) = self.nodes.get(&dst) {
+                if let Some(f) = n.fluid_filter {
+                    if f != item {
+                        continue;
+                    }
+                }
+            }
+            let avail = self.nodes.get(&src).map(|n| n.stock(item)).unwrap_or(0.0);
+            let space = NODE_BUFFER
+                - self.nodes.get(&dst).map(|n| n.stock(item)).unwrap_or(0.0);
+            let amt = rate.min(avail).min(space.max(0.0));
+            if amt <= 1e-4 {
+                continue;
+            }
+            let purity = self.nodes.get(&src).map(|n| n.purity(item)).unwrap_or(50.0);
+            if let Some(n) = self.nodes.get_mut(&src) {
+                let _ = n.try_take_stock(item, amt);
+            }
+            if let Some(n) = self.nodes.get_mut(&dst) {
+                if n.fluid_filter.is_none() && item.is_fluid() {
+                    n.fluid_filter = Some(item);
+                }
+                n.add_stock_purity(item, amt, purity);
+            }
+        }
+    }
+
+    fn step_lab(&mut self, id: u32, pay: Option<u32>, dt: f32) {
+        let Some(root) = pay else {
+            if let Some(n) = self.nodes.get_mut(&id) {
+                n.working = false;
+            }
+            return;
+        };
+        let cost = 3.0 * dt;
+        let has = self.network_energy.get(&root).copied().unwrap_or(0.0);
+        if has < cost {
+            if let Some(n) = self.nodes.get_mut(&id) {
+                n.working = false;
+            }
+            return;
+        }
+        if let Some(e) = self.network_energy.get_mut(&root) {
+            *e -= cost;
+        }
+        let completed = {
+            let tech = &mut self.tech;
+            let nodes = &mut self.nodes;
+            tech.tick_lab(dt, &mut |item, amt| {
+                nodes
+                    .get_mut(&id)
+                    .map(|n| n.try_take_stock(item, amt))
+                    .unwrap_or(false)
+            })
+        };
+        if let Some(tid) = completed {
+            self.tech_completed = Some(tid);
+        }
+        if let Some(n) = self.nodes.get_mut(&id) {
+            n.working = self.tech.active.is_some();
+        }
+    }
+
+    fn step_nexus_site(&mut self, id: u32, pay: Option<u32>, dt: f32) {
+        let Some(root) = pay else {
+            return;
+        };
+        let cost = 20.0 * dt;
+        let has = self.network_energy.get(&root).copied().unwrap_or(0.0);
+        if has < cost || !self.tech.is_researched("era1_tech_nexus_construction") {
+            if let Some(n) = self.nodes.get_mut(&id) {
+                n.working = false;
+            }
+            return;
+        }
+        // Consume structural frames + plates toward completion.
+        let frame = Item::Gear; // aliased structural frame
+        let plate = Item::IronIngot;
+        let need_frame = 0.05 * dt;
+        let need_plate = 0.2 * dt;
+        let ok = {
+            let n = self.nodes.get(&id);
+            n.map(|n| n.stock(frame) >= need_frame && n.stock(plate) >= need_plate)
+                .unwrap_or(false)
+        };
+        if !ok {
+            if let Some(n) = self.nodes.get_mut(&id) {
+                n.working = false;
+            }
+            return;
+        }
+        if let Some(e) = self.network_energy.get_mut(&root) {
+            *e -= cost;
+        }
+        if let Some(n) = self.nodes.get_mut(&id) {
+            let _ = n.try_take_stock(frame, need_frame);
+            let _ = n.try_take_stock(plate, need_plate);
+            n.working = true;
+        }
+        self.tech.nexus_progress = (self.tech.nexus_progress + dt * 0.002).min(1.0);
+        if self.tech.nexus_progress >= 1.0 && !self.tech.nexus_complete {
+            // Promote site → Nexus landmark.
+            if let Some(n) = self.nodes.get_mut(&id) {
+                let (x, y) = (n.x, n.y);
+                *n = Node::new(BuildingKind::Nexus, x, y, Facing::E);
+            }
+            self.tech.nexus_complete = true;
+            self.tech.era2_unlocked = true;
+            self.tech.researched.insert("era1_tech_era_transition".into());
+            self.era1_complete = true;
+        }
+    }
+
+    /// Data-driven Era crafter. Returns true if it handled the node this tick.
+    fn step_era_crafter(&mut self, id: u32, pay: Option<u32>, dt: f32) -> bool {
+        let Some(root) = pay else {
+            return false;
+        };
+        let (machine_key, era_active, craft_recipe, craft_t) = {
+            let Some(n) = self.nodes.get(&id) else {
+                return false;
+            };
+            let key = n
+                .machine_id
+                .and_then(|i| content().machine(i).map(|m| m.id.clone()))
+                .unwrap_or_default();
+            if key.is_empty() {
+                return false;
+            }
+            (key, n.era_craft, n.craft_recipe, n.craft_t)
+        };
+
+        // Continue active Era craft.
+        if era_active && craft_recipe != 0 {
+            let Some(recipe) = content().recipe(craft_recipe) else {
+                if let Some(n) = self.nodes.get_mut(&id) {
+                    n.era_craft = false;
+                    n.craft_recipe = 0;
+                    n.craft_t = 0.0;
+                }
+                return true;
+            };
+            if !self.tech.recipe_unlocked(&recipe.technology_unlock) {
+                if let Some(n) = self.nodes.get_mut(&id) {
+                    n.working = false;
+                }
+                return true;
+            }
+            // Min purity gate for sensitive recipes (laser optics etc.).
+            if recipe.purity_effect.abs() > 0.0 || recipe.id.contains("optical") || recipe.id.contains("laser_lens") {
+                for io in &recipe.inputs {
+                    let item = Item::from_u16(io.item);
+                    if let Some(def) = content().item(io.item) {
+                        if def.purity_supported {
+                            let p = self.nodes.get(&id).map(|n| n.purity(item)).unwrap_or(0.0);
+                            let min_p = if recipe.id.contains("laser") || recipe.id.contains("optical") {
+                                70.0
+                            } else {
+                                0.0
+                            };
+                            if p + 1e-3 < min_p {
+                                if let Some(n) = self.nodes.get_mut(&id) {
+                                    n.working = false;
+                                }
+                                return true;
+                            }
+                        }
+                    }
+                }
+            }
+            let cost = recipe.power_kw * dt;
+            let has = self.network_energy.get(&root).copied().unwrap_or(0.0);
+            if has < cost {
+                if let Some(n) = self.nodes.get_mut(&id) {
+                    n.working = false;
+                }
+                return true;
+            }
+            if let Some(e) = self.network_energy.get_mut(&root) {
+                *e -= cost;
+            }
+            let done = craft_t + dt;
+            if done >= recipe.processing_time {
+                if era_outputs_fit(self.nodes.get(&id), recipe) {
+                    let in_purity = {
+                        let n = self.nodes.get(&id).unwrap();
+                        recipe
+                            .inputs
+                            .first()
+                            .map(|io| n.purity(Item::from_u16(io.item)))
+                            .unwrap_or(50.0)
+                    };
+                    let out_purity = (in_purity + recipe.purity_effect).clamp(0.0, 100.0);
+                    if let Some(n) = self.nodes.get_mut(&id) {
+                        for io in recipe.all_outputs() {
+                            n.add_stock_purity(Item::from_u16(io.item), io.amount, out_purity);
+                        }
+                        n.craft_recipe = 0;
+                        n.craft_t = 0.0;
+                        n.era_craft = false;
+                        n.working = true;
+                    }
+                } else if let Some(n) = self.nodes.get_mut(&id) {
+                    n.craft_t = recipe.processing_time;
+                    n.working = false;
+                }
+            } else if let Some(n) = self.nodes.get_mut(&id) {
+                n.craft_t = done;
+                n.working = true;
+            }
+            return true;
+        }
+
+        // Start a new Era recipe for this machine.
+        let candidates: Vec<u16> = {
+            let mut list = content().recipes_for_machine(&machine_key).to_vec();
+            if list.is_empty() {
+                if let Some(m) = content().machine_by_str(&machine_key) {
+                    list = content().recipes_for_categories(&m.recipe_categories);
+                }
+            }
+            list
+        };
+        for rid in candidates {
+            let Some(recipe) = content().recipe(rid) else {
+                continue;
+            };
+            if !self.tech.recipe_unlocked(&recipe.technology_unlock) {
+                continue;
+            }
+            let Some(n) = self.nodes.get(&id) else {
+                return false;
+            };
+            let mut ok = true;
+            for io in &recipe.inputs {
+                if n.stock(Item::from_u16(io.item)) + 1e-4 < io.amount {
+                    ok = false;
+                    break;
+                }
+            }
+            if !ok || !era_outputs_fit(Some(n), recipe) {
+                continue;
+            }
+            let cost = recipe.power_kw * dt;
+            let has = self.network_energy.get(&root).copied().unwrap_or(0.0);
+            if has < cost {
+                if let Some(n) = self.nodes.get_mut(&id) {
+                    n.working = false;
+                }
+                return true;
+            }
+            if let Some(e) = self.network_energy.get_mut(&root) {
+                *e -= cost;
+            }
+            if let Some(n) = self.nodes.get_mut(&id) {
+                for io in &recipe.inputs {
+                    let _ = n.try_take_stock(Item::from_u16(io.item), io.amount);
+                }
+                n.craft_recipe = rid;
+                n.craft_t = dt.min(recipe.processing_time);
+                n.era_craft = true;
+                n.working = true;
+            }
+            return true;
+        }
+        if let Some(n) = self.nodes.get_mut(&id) {
+            // No era recipe started — allow legacy fallback for smelter/assembler.
+            if matches!(n.kind, BuildingKind::Smelter | BuildingKind::Assembler) {
+                return false;
+            }
+            n.working = false;
+        }
+        true
+    }
+
+    fn step_crafter(&mut self, id: u32, pay: Option<u32>, dt: f32, machine: MachineKind) {
+        let Some(root) = pay else {
+            if let Some(n) = self.nodes.get_mut(&id) {
+                n.working = false;
+            }
+            return;
+        };
+
+        // Finish or continue an in-flight craft.
+        let active = self.nodes.get(&id).map(|n| (n.craft_recipe, n.craft_t));
+        if let Some((rid, t)) = active {
+            if rid != 0 {
+                let Some(recipe) = recipes::recipe_by_id(rid) else {
+                    if let Some(n) = self.nodes.get_mut(&id) {
+                        n.craft_recipe = 0;
+                        n.craft_t = 0.0;
+                        n.working = false;
+                    }
+                    return;
+                };
+                let cost = recipe.power.max(1.0) * dt;
+                let has = self.network_energy.get(&root).copied().unwrap_or(0.0);
+                if has < cost {
+                    if let Some(n) = self.nodes.get_mut(&id) {
+                        n.working = false;
+                    }
+                    return;
+                }
+                if let Some(e) = self.network_energy.get_mut(&root) {
+                    *e -= cost;
+                }
+                let done = t + dt;
+                if done >= recipe.craft_time {
+                    if outputs_fit(self.nodes.get(&id), recipe) {
+                        if let Some(n) = self.nodes.get_mut(&id) {
+                            for &(item, qty) in recipe.outputs {
+                                n.add_stock(item, qty as f32);
+                            }
+                            n.craft_recipe = 0;
+                            n.craft_t = 0.0;
+                            n.working = true;
+                        }
+                    } else if let Some(n) = self.nodes.get_mut(&id) {
+                        // Blocked on output space — hold craft complete until free.
+                        n.craft_t = recipe.craft_time;
+                        n.working = false;
+                    }
+                } else if let Some(n) = self.nodes.get_mut(&id) {
+                    n.craft_t = done;
+                    n.working = true;
+                }
+                return;
+            }
+        }
+
+        // Try to start a recipe that fits current stocks.
+        let started = {
+            let Some(n) = self.nodes.get(&id) else {
+                return;
+            };
+            pick_startable_recipe(n, machine)
+        };
+        let Some(recipe) = started else {
+            if let Some(n) = self.nodes.get_mut(&id) {
+                n.working = false;
+            }
+            return;
+        };
+        let cost = recipe.power.max(1.0) * dt;
+        let has = self.network_energy.get(&root).copied().unwrap_or(0.0);
+        if has < cost {
+            if let Some(n) = self.nodes.get_mut(&id) {
+                n.working = false;
+            }
+            return;
+        }
+        if let Some(e) = self.network_energy.get_mut(&root) {
+            *e -= cost;
+        }
+        if let Some(n) = self.nodes.get_mut(&id) {
+            for &(item, qty) in recipe.inputs {
+                let _ = n.try_take_stock(item, qty as f32);
+            }
+            n.craft_recipe = recipe.id;
+            n.craft_t = dt.min(recipe.craft_time);
+            n.working = true;
+        }
+    }
+
+}
+
+fn outputs_fit(n: Option<&Node>, recipe: &Recipe) -> bool {
+    let Some(n) = n else {
+        return false;
+    };
+    for &(item, qty) in recipe.outputs {
+        if n.stock(item) + qty as f32 > NODE_BUFFER + 1e-3 {
+            return false;
+        }
+    }
+    true
+}
+
+fn era_outputs_fit(n: Option<&Node>, recipe: &content::RuntimeRecipe) -> bool {
+    let Some(n) = n else {
+        return false;
+    };
+    for io in recipe.all_outputs() {
+        if n.stock(Item::from_u16(io.item)) + io.amount > NODE_BUFFER + 1e-3 {
+            return false;
+        }
+    }
+    true
+}
+
+fn pick_startable_recipe(n: &Node, machine: MachineKind) -> Option<&'static Recipe> {
+    for recipe in recipes::recipes_for(machine) {
+        let mut ok = true;
+        for &(item, qty) in recipe.inputs {
+            if n.stock(item) + 1e-4 < qty as f32 {
+                ok = false;
+                break;
+            }
+        }
+        if !ok || !outputs_fit(Some(n), recipe) {
+            continue;
+        }
+        return Some(recipe);
+    }
+    None
 }
 
 fn prefer_connect_hint(a: &'static str, b: &'static str) -> &'static str {

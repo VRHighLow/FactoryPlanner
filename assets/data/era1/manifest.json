@@ -1,0 +1,11 @@
+{
+  "era": 1,
+  "name": "Planetary Recovery",
+  "counts": {
+    "items": 429,
+    "fluids": 30,
+    "recipes": 520,
+    "machines": 103,
+    "technologies": 35
+  }
+}

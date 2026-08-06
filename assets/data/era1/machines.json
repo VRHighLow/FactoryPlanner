@@ -1,0 +1,2599 @@
+[
+  {
+    "id": "era1_machine_advanced_electronics_printer",
+    "name": "Advanced Electronics Printer",
+    "category": "electronics",
+    "tier": 3,
+    "description": "Nexus computational cores and top electronics.",
+    "function": "Top electronics.",
+    "size": [
+      4,
+      4
+    ],
+    "power_kw": 900.0,
+    "power_type": "electrical",
+    "recipe_categories": [
+      "nexus_electronics"
+    ],
+    "fluid_ports": [
+      "in:upw"
+    ],
+    "technology_unlock": "era1_tech_nexus_construction",
+    "purity_behavior": "Strict purity",
+    "maintenance": "Cleanroom",
+    "upgrade_path": "\u2014",
+    "animation": "Lithography",
+    "placeable": true
+  },
+  {
+    "id": "era1_machine_advanced_purifier_mk1",
+    "name": "Advanced Ore Purifier Mk1",
+    "category": "processing",
+    "tier": 2,
+    "description": "Catalyzed multi-stage purifier for high-efficiency concentrates.",
+    "function": "High purity ferrite/conductive preparation.",
+    "size": [
+      4,
+      4
+    ],
+    "power_kw": 450.0,
+    "power_type": "electrical",
+    "recipe_categories": [
+      "advanced_purification"
+    ],
+    "fluid_ports": [
+      "in:acid",
+      "in:catalyst",
+      "out:waste"
+    ],
+    "technology_unlock": "era1_tech_advanced_metallurgy",
+    "purity_behavior": "+18 to +22% purity. Required path for precision alloys.",
+    "maintenance": "Catalyst beds foul; scheduled bake-out reduces downtime.",
+    "upgrade_path": "Mk2 \u2014 +purity, lower catalyst use",
+    "animation": "Multi-column cascade",
+    "placeable": true
+  },
+  {
+    "id": "era1_machine_alloy_furnace_mk1",
+    "name": "Alloy Furnace Mk1",
+    "category": "processing",
+    "tier": 2,
+    "description": "Combines metals/carbon into steels and alloy blanks.",
+    "function": "Steel composite, alloy blanks, reinforced ferrite.",
+    "size": [
+      4,
+      3
+    ],
+    "power_kw": 600.0,
+    "power_type": "thermal",
+    "recipe_categories": [
+      "alloying"
+    ],
+    "fluid_ports": [
+      "in:oxygen"
+    ],
+    "technology_unlock": "era1_tech_advanced_metallurgy",
+    "purity_behavior": "Can raise grade chance; purity floor enforced on premium recipes.",
+    "maintenance": "Crucible stress cracks on rapid thermal cycling.",
+    "upgrade_path": "Precision Alloy Furnace",
+    "animation": "Tilting crucible",
+    "placeable": true
+  },
+  {
+    "id": "era1_machine_ammo_logistics_factory",
+    "name": "Ammunition Logistics Factory",
+    "category": "military",
+    "tier": 2,
+    "description": "Boxes ammo and builds ammo hubs/belts.",
+    "function": "Ammo logistics.",
+    "size": [
+      3,
+      4
+    ],
+    "power_kw": 220.0,
+    "power_type": "electrical",
+    "recipe_categories": [
+      "ammo_logistics"
+    ],
+    "fluid_ports": [],
+    "technology_unlock": "era1_tech_defense_industry",
+    "purity_behavior": "N/A",
+    "maintenance": "Explosion-safe zoning.",
+    "upgrade_path": "Mk2",
+    "animation": "Crate line",
+    "placeable": true
+  },
+  {
+    "id": "era1_machine_ammunition_factory_mk1",
+    "name": "Ammunition Factory",
+    "category": "manufacturing",
+    "tier": 2,
+    "description": "Loads casings, cores, propellant into ammo.",
+    "function": "Munitions.",
+    "size": [
+      3,
+      4
+    ],
+    "power_kw": 280.0,
+    "power_type": "electrical",
+    "recipe_categories": [
+      "ammunition"
+    ],
+    "fluid_ports": [
+      "in:propellant"
+    ],
+    "technology_unlock": "era1_tech_defense_industry",
+    "purity_behavior": "N/A",
+    "maintenance": "Explosion hazard if propellant mishandled.",
+    "upgrade_path": "Mk2",
+    "animation": "Belt-fed loaders",
+    "placeable": true
+  },
+  {
+    "id": "era1_machine_armor_processor_mk1",
+    "name": "Armor Processor",
+    "category": "manufacturing",
+    "tier": 2,
+    "description": "Forms and layers armor plates/composites.",
+    "function": "Military armor processing.",
+    "size": [
+      3,
+      3
+    ],
+    "power_kw": 300.0,
+    "power_type": "electrical",
+    "recipe_categories": [
+      "armor"
+    ],
+    "fluid_ports": [],
+    "technology_unlock": "era1_tech_defense_industry",
+    "purity_behavior": "Higher grade armor from better alloys.",
+    "maintenance": "Press dies wear.",
+    "upgrade_path": "Mk2",
+    "animation": "Hydraulic stamp",
+    "placeable": true
+  },
+  {
+    "id": "era1_machine_assembler_mk1",
+    "name": "Assembler Mk1",
+    "category": "manufacturing",
+    "tier": 1,
+    "description": "General discrete assembler for frames, gears, logistics parts.",
+    "function": "Core manufacturing.",
+    "size": [
+      3,
+      3
+    ],
+    "power_kw": 120.0,
+    "power_type": "electrical",
+    "recipe_categories": [
+      "assembly",
+      "mechanical"
+    ],
+    "fluid_ports": [],
+    "technology_unlock": "era1_tech_industrial_automation",
+    "purity_behavior": "Grade industrial default; purity usually N/A.",
+    "maintenance": "Arm wear.",
+    "upgrade_path": "Mk2",
+    "animation": "Articulated arms",
+    "placeable": true
+  },
+  {
+    "id": "era1_machine_assembler_mk2",
+    "name": "Assembler Mk2",
+    "category": "manufacturing",
+    "tier": 2,
+    "description": "Faster assembler with smart logistics recipes.",
+    "function": "Mid automation crafting.",
+    "size": [
+      3,
+      3
+    ],
+    "power_kw": 220.0,
+    "power_type": "electrical",
+    "recipe_categories": [
+      "assembly",
+      "advanced_assembly"
+    ],
+    "fluid_ports": [],
+    "technology_unlock": "era1_tech_advanced_automation",
+    "purity_behavior": "Can accept quality modules.",
+    "maintenance": "Needs firmware updates.",
+    "upgrade_path": "Mk3",
+    "animation": "Dual-arm",
+    "placeable": true
+  },
+  {
+    "id": "era1_machine_assembler_mk3",
+    "name": "Assembler Mk3",
+    "category": "processing",
+    "tier": 1,
+    "description": "Auto machine for era1_machine_assembler_mk3",
+    "function": "",
+    "size": [
+      3,
+      3
+    ],
+    "power_kw": 150,
+    "power_type": "electrical",
+    "recipe_categories": [
+      "automation"
+    ],
+    "fluid_ports": [],
+    "technology_unlock": "era1_tech_systems_science",
+    "purity_behavior": "",
+    "maintenance": "",
+    "upgrade_path": "",
+    "animation": "",
+    "placeable": true
+  },
+  {
+    "id": "era1_machine_atmospheric_condenser_mk1",
+    "name": "Water Condenser Mk1",
+    "category": "extraction",
+    "tier": 1,
+    "description": "Condenses atmospheric mix / moisture into condensed water. Alias: atmospheric condenser.",
+    "function": "Industrial water synthesis step 1.",
+    "size": [
+      3,
+      3
+    ],
+    "power_kw": 150.0,
+    "power_type": "electrical",
+    "recipe_categories": [
+      "water",
+      "condensation"
+    ],
+    "fluid_ports": [
+      "in:atmospheric_mix",
+      "out:condensed_water"
+    ],
+    "technology_unlock": "era1_tech_fluid_engineering",
+    "purity_behavior": "Output water starts low purity; requires purification chain.",
+    "maintenance": "Cooling fins foul; efficiency drops in heat/storm.",
+    "upgrade_path": "Mk2 \u2014 lower kWh/water, optional direct moisture path",
+    "animation": "Frosting coils + drip",
+    "placeable": true
+  },
+  {
+    "id": "era1_machine_atmospheric_intake_mk1",
+    "name": "Atmospheric Intake Mk1",
+    "category": "extraction",
+    "tier": 1,
+    "description": "Compresses ambient atmosphere into processable gas mix.",
+    "function": "Collect atmospheric mix for separation/condensation.",
+    "size": [
+      2,
+      2
+    ],
+    "power_kw": 75.0,
+    "power_type": "electrical",
+    "recipe_categories": [
+      "atmosphere",
+      "gas_intake"
+    ],
+    "fluid_ports": [
+      "out:atmospheric_mix"
+    ],
+    "technology_unlock": "era1_tech_fluid_engineering",
+    "purity_behavior": "No material purity; filter clogging simulated via maintenance.",
+    "maintenance": "Intake filters clog in fog/storm; throughput drops until cleaned.",
+    "upgrade_path": "Mk2 \u2014 storm-resistant filters, +flow",
+    "animation": "Turbine intake swirl",
+    "placeable": true
+  },
+  {
+    "id": "era1_machine_atmospheric_separator_mk1",
+    "name": "Gas Separator Mk1",
+    "category": "chemical",
+    "tier": 1,
+    "description": "Splits atmospheric mix to N2/O2/CO2.",
+    "function": "Industrial gases.",
+    "size": [
+      3,
+      3
+    ],
+    "power_kw": 400.0,
+    "power_type": "electrical",
+    "recipe_categories": [
+      "gas_separation"
+    ],
+    "fluid_ports": [
+      "in:mix",
+      "out:n2",
+      "out:o2",
+      "out:co2"
+    ],
+    "technology_unlock": "era1_tech_fluid_engineering",
+    "purity_behavior": "Output quality via maintenance.",
+    "maintenance": "Membrane wear.",
+    "upgrade_path": "Mk2",
+    "animation": "Columns",
+    "placeable": true
+  },
+  {
+    "id": "era1_machine_ballistic_turret",
+    "name": "Ballistic Turret",
+    "category": "military",
+    "tier": 1,
+    "description": "Ballistic Turret",
+    "function": "Ballistic Turret",
+    "size": [
+      2,
+      2
+    ],
+    "power_kw": 40,
+    "power_type": "electrical",
+    "recipe_categories": [
+      "defense"
+    ],
+    "fluid_ports": [],
+    "technology_unlock": "era1_tech_defense_industry",
+    "purity_behavior": "",
+    "maintenance": "",
+    "upgrade_path": "",
+    "animation": "",
+    "placeable": true
+  },
+  {
+    "id": "era1_machine_battery_assembler_mk1",
+    "name": "Battery Assembler Mk1",
+    "category": "electronics",
+    "tier": 1,
+    "description": "Packs cells into battery packs/storage modules.",
+    "function": "Battery packs.",
+    "size": [
+      3,
+      2
+    ],
+    "power_kw": 150.0,
+    "power_type": "electrical",
+    "recipe_categories": [
+      "battery_assembly"
+    ],
+    "fluid_ports": [],
+    "technology_unlock": "era1_tech_power_systems",
+    "purity_behavior": "Cell grade\u2192pack grade",
+    "maintenance": "Thermal paste",
+    "upgrade_path": "Mk2",
+    "animation": "Pack line",
+    "placeable": true
+  },
+  {
+    "id": "era1_machine_battery_processor_mk1",
+    "name": "Battery Processor",
+    "category": "electronics",
+    "tier": 1,
+    "description": "Forms energy cells from graphite, plates, electrolyte.",
+    "function": "Battery cells.",
+    "size": [
+      3,
+      3
+    ],
+    "power_kw": 200.0,
+    "power_type": "electrical",
+    "recipe_categories": [
+      "batteries"
+    ],
+    "fluid_ports": [
+      "in:electrolyte"
+    ],
+    "technology_unlock": "era1_tech_power_systems",
+    "purity_behavior": "Electrolyte purity affects cell grade.",
+    "maintenance": "Acid corrosion.",
+    "upgrade_path": "Battery Assembler",
+    "animation": "Cell stacker",
+    "placeable": true
+  },
+  {
+    "id": "era1_machine_boiler_mk1",
+    "name": "Boiler Mk1",
+    "category": "chemical",
+    "tier": 1,
+    "description": "Makes process steam from purified water.",
+    "function": "Steam.",
+    "size": [
+      2,
+      3
+    ],
+    "power_kw": 300.0,
+    "power_type": "thermal",
+    "recipe_categories": [
+      "steam"
+    ],
+    "fluid_ports": [
+      "in:water",
+      "out:steam"
+    ],
+    "technology_unlock": "era1_tech_fluid_engineering",
+    "purity_behavior": "N/A",
+    "maintenance": "Scale buildup",
+    "upgrade_path": "Mk2",
+    "animation": "Boiler flame",
+    "placeable": true
+  },
+  {
+    "id": "era1_machine_calibration_station",
+    "name": "Calibration Station",
+    "category": "manufacturing",
+    "tier": 2,
+    "description": "Recalibrates precision modules/machines.",
+    "function": "Calibration.",
+    "size": [
+      2,
+      3
+    ],
+    "power_kw": 120.0,
+    "power_type": "electrical",
+    "recipe_categories": [
+      "calibration"
+    ],
+    "fluid_ports": [],
+    "technology_unlock": "era1_tech_precision_manufacturing",
+    "purity_behavior": "Restores grade potential",
+    "maintenance": "Reference standards drift",
+    "upgrade_path": "Mk2",
+    "animation": "Laser jig",
+    "placeable": true
+  },
+  {
+    "id": "era1_machine_carbon_drill_mk1",
+    "name": "Carbon Extraction Drill Mk1",
+    "category": "extraction",
+    "tier": 1,
+    "description": "Cuts and lifts dense carbon deposits.",
+    "function": "Extract carbon deposits.",
+    "size": [
+      3,
+      3
+    ],
+    "power_kw": 55.0,
+    "power_type": "electrical",
+    "recipe_categories": [
+      "mining",
+      "carbon_extraction"
+    ],
+    "fluid_ports": [],
+    "technology_unlock": "era1_tech_basic_recovery",
+    "purity_behavior": "Affects graphite conversion efficiency later.",
+    "maintenance": "Carbon grit abrades conveyors; more frequent bit drain on low stability.",
+    "upgrade_path": "Mk2 \u2014 cleaner cut (less carbon residue on crush)",
+    "animation": "Oscillating cutter head",
+    "placeable": true
+  },
+  {
+    "id": "era1_machine_carbon_furnace_mk1",
+    "name": "Carbon Furnace Mk1",
+    "category": "processing",
+    "tier": 1,
+    "description": "Graphite and activated carbon.",
+    "function": "Carbon thermal processing.",
+    "size": [
+      3,
+      3
+    ],
+    "power_kw": 500.0,
+    "power_type": "thermal",
+    "recipe_categories": [
+      "carbon_thermal"
+    ],
+    "fluid_ports": [
+      "in:steam optional"
+    ],
+    "technology_unlock": "era1_tech_carbon_processing",
+    "purity_behavior": "+purity on graphite",
+    "maintenance": "Refractory wear",
+    "upgrade_path": "Mk2",
+    "animation": "Furnace glow",
+    "placeable": true
+  },
+  {
+    "id": "era1_machine_ceramic_furnace_mk1",
+    "name": "Ceramic Furnace Mk1",
+    "category": "processing",
+    "tier": 1,
+    "description": "Fires glass, ceramics, reinforced glass.",
+    "function": "Silicate finishing.",
+    "size": [
+      3,
+      3
+    ],
+    "power_kw": 350.0,
+    "power_type": "thermal",
+    "recipe_categories": [
+      "ceramics",
+      "glass"
+    ],
+    "fluid_ports": [],
+    "technology_unlock": "era1_tech_ceramic_engineering",
+    "purity_behavior": "Purity of silicon feeds optical quality later.",
+    "maintenance": "Kiln bricks erode; glass recipes leave residue.",
+    "upgrade_path": "Ceramic Furnace Mk2",
+    "animation": "Kiln glow",
+    "placeable": true
+  },
+  {
+    "id": "era1_machine_ceramic_furnace_mk2",
+    "name": "Ceramic Furnace Mk2",
+    "category": "processing",
+    "tier": 2,
+    "description": "High-temp ceramic furnace for advanced/heat-resistant ceramics.",
+    "function": "Advanced ceramic production.",
+    "size": [
+      4,
+      3
+    ],
+    "power_kw": 800.0,
+    "power_type": "thermal",
+    "recipe_categories": [
+      "advanced_ceramics"
+    ],
+    "fluid_ports": [
+      "in:ultra_pure_water"
+    ],
+    "technology_unlock": "era1_tech_advanced_ceramics",
+    "purity_behavior": "+5% purity on advanced ceramic recipe.",
+    "maintenance": "Extreme thermal stress; schedule cooldown cycles.",
+    "upgrade_path": "Mk3 (Era 2)",
+    "animation": "White-hot chamber",
+    "placeable": true
+  },
+  {
+    "id": "era1_machine_charge_cannon",
+    "name": "Charge Cannon",
+    "category": "military",
+    "tier": 1,
+    "description": "Charge Cannon",
+    "function": "Charge Cannon",
+    "size": [
+      2,
+      2
+    ],
+    "power_kw": 80,
+    "power_type": "electrical",
+    "recipe_categories": [
+      "defense"
+    ],
+    "fluid_ports": [],
+    "technology_unlock": "era1_tech_defense_research",
+    "purity_behavior": "",
+    "maintenance": "",
+    "upgrade_path": "",
+    "animation": "",
+    "placeable": true
+  },
+  {
+    "id": "era1_machine_chemical_filter_machine",
+    "name": "Chemical Filter Unit Mk1",
+    "category": "chemical",
+    "tier": 1,
+    "description": "Scrubs fluids/gases with filter media.",
+    "function": "Filtration skid.",
+    "size": [
+      3,
+      2
+    ],
+    "power_kw": 150.0,
+    "power_type": "electrical",
+    "recipe_categories": [
+      "filtration"
+    ],
+    "fluid_ports": [
+      "in:dirty",
+      "out:clean"
+    ],
+    "technology_unlock": "era1_tech_fluid_engineering",
+    "purity_behavior": "Raises fluid purity.",
+    "maintenance": "Consumes filters.",
+    "upgrade_path": "Mk2",
+    "animation": "Canister swap",
+    "placeable": true
+  },
+  {
+    "id": "era1_machine_chemical_processor_mk1",
+    "name": "Chemical Processor Mk1",
+    "category": "chemical",
+    "tier": 1,
+    "description": "Mineral compound/binder and simple chem prep.",
+    "function": "Prep chemistry.",
+    "size": [
+      3,
+      2
+    ],
+    "power_kw": 140.0,
+    "power_type": "electrical",
+    "recipe_categories": [
+      "chem_prep"
+    ],
+    "fluid_ports": [
+      "in:fluid",
+      "out:fluid"
+    ],
+    "technology_unlock": "era1_tech_chemical_manufacturing",
+    "purity_behavior": "+purity on compounds",
+    "maintenance": "Fouling",
+    "upgrade_path": "Mk2",
+    "animation": "Mixer",
+    "placeable": true
+  },
+  {
+    "id": "era1_machine_chemical_reactor_mk1",
+    "name": "Chemical Reactor Mk1",
+    "category": "chemical",
+    "tier": 1,
+    "description": "General stirred reactor for acids, additives, electrolytes.",
+    "function": "Core chemistry.",
+    "size": [
+      3,
+      3
+    ],
+    "power_kw": 250.0,
+    "power_type": "electrical",
+    "recipe_categories": [
+      "chemistry"
+    ],
+    "fluid_ports": [
+      "in:a",
+      "in:b",
+      "out:product",
+      "out:waste"
+    ],
+    "technology_unlock": "era1_tech_chemical_manufacturing",
+    "purity_behavior": "Recipe-defined purity effects.",
+    "maintenance": "Fouling/pressure events.",
+    "upgrade_path": "Mk2",
+    "animation": "Agitator",
+    "placeable": true
+  },
+  {
+    "id": "era1_machine_chemical_reactor_mk2",
+    "name": "Chemical Reactor Mk2",
+    "category": "chemical",
+    "tier": 2,
+    "description": "Pressurized reactor for propellant and advanced reactions.",
+    "function": "Advanced chemistry.",
+    "size": [
+      4,
+      3
+    ],
+    "power_kw": 500.0,
+    "power_type": "electrical",
+    "recipe_categories": [
+      "advanced_chemistry"
+    ],
+    "fluid_ports": [
+      "in:a",
+      "in:b",
+      "out:product"
+    ],
+    "technology_unlock": "era1_tech_chemical_manufacturing",
+    "purity_behavior": "Better conversion.",
+    "maintenance": "Overpressure risk.",
+    "upgrade_path": "Mk3 Era2",
+    "animation": "Pressurized vessel",
+    "placeable": true
+  },
+  {
+    "id": "era1_machine_circuit_printer_mk1",
+    "name": "Circuit Printer Mk1",
+    "category": "electronics",
+    "tier": 1,
+    "description": "Prints basic circuits from substrates and wire.",
+    "function": "Basic circuits.",
+    "size": [
+      2,
+      3
+    ],
+    "power_kw": 150.0,
+    "power_type": "electrical",
+    "recipe_categories": [
+      "circuits"
+    ],
+    "fluid_ports": [],
+    "technology_unlock": "era1_tech_electronics",
+    "purity_behavior": "N/A",
+    "maintenance": "Trace defects if dirty.",
+    "upgrade_path": "Circuit Printer Mk2",
+    "animation": "Trace laser",
+    "placeable": true
+  },
+  {
+    "id": "era1_machine_coating_unit_mk1",
+    "name": "Coating Unit Mk1",
+    "category": "chemical",
+    "tier": 2,
+    "description": "Applies industrial coatings to plates.",
+    "function": "Surface coating.",
+    "size": [
+      3,
+      2
+    ],
+    "power_kw": 200.0,
+    "power_type": "electrical",
+    "recipe_categories": [
+      "coating"
+    ],
+    "fluid_ports": [
+      "in:solvent"
+    ],
+    "technology_unlock": "era1_tech_chemical_manufacturing",
+    "purity_behavior": "N/A",
+    "maintenance": "VOC hazard",
+    "upgrade_path": "Mk2",
+    "animation": "Spray booth",
+    "placeable": true
+  },
+  {
+    "id": "era1_machine_compact_generator",
+    "name": "Compact Generator",
+    "category": "power",
+    "tier": 2,
+    "description": "Placeable generator (crafted power building).",
+    "function": "Power generation.",
+    "size": [
+      3,
+      3
+    ],
+    "power_kw": 0.0,
+    "power_type": "electrical_output",
+    "recipe_categories": [
+      "power_gen"
+    ],
+    "fluid_ports": [],
+    "technology_unlock": "era1_tech_power_systems",
+    "purity_behavior": "N/A",
+    "maintenance": "Bearing wear",
+    "upgrade_path": "Mk2",
+    "animation": "Rotor",
+    "placeable": true
+  },
+  {
+    "id": "era1_machine_component_assembler_mk1",
+    "name": "Component Assembler Mk1",
+    "category": "manufacturing",
+    "tier": 1,
+    "description": "Pipes, valves, fittings, storage parts.",
+    "function": "Mech components.",
+    "size": [
+      3,
+      2
+    ],
+    "power_kw": 130.0,
+    "power_type": "electrical",
+    "recipe_categories": [
+      "component_assembly"
+    ],
+    "fluid_ports": [],
+    "technology_unlock": "era1_tech_fluid_engineering",
+    "purity_behavior": "N/A",
+    "maintenance": "Standard",
+    "upgrade_path": "Mk2",
+    "animation": "Arm",
+    "placeable": true
+  },
+  {
+    "id": "era1_machine_component_fabricator_mk1",
+    "name": "Component Fabricator Mk1",
+    "category": "manufacturing",
+    "tier": 1,
+    "description": "Fabricates precision mechanical subsystems (hydraulics, housings, filters).",
+    "function": "Component fabrication.",
+    "size": [
+      3,
+      3
+    ],
+    "power_kw": 180.0,
+    "power_type": "electrical",
+    "recipe_categories": [
+      "component_fab"
+    ],
+    "fluid_ports": [],
+    "technology_unlock": "era1_tech_industrial_automation",
+    "purity_behavior": "Grade rises with precision parts.",
+    "maintenance": "Tooling magazine swaps.",
+    "upgrade_path": "Precision Fabricator",
+    "animation": "Tool head swap",
+    "placeable": true
+  },
+  {
+    "id": "era1_machine_component_processor_mk1",
+    "name": "Component Processor Mk1",
+    "category": "manufacturing",
+    "tier": 1,
+    "description": "Wire/foil/trace bundling and simple formative recipes.",
+    "function": "Light components.",
+    "size": [
+      2,
+      3
+    ],
+    "power_kw": 100.0,
+    "power_type": "electrical",
+    "recipe_categories": [
+      "component_process"
+    ],
+    "fluid_ports": [],
+    "technology_unlock": "era1_tech_electronics",
+    "purity_behavior": "N/A",
+    "maintenance": "Standard",
+    "upgrade_path": "Mk2",
+    "animation": "Roller",
+    "placeable": true
+  },
+  {
+    "id": "era1_machine_composite_processor_mk1",
+    "name": "Composite Processor Mk1",
+    "category": "processing",
+    "tier": 2,
+    "description": "Carbon/ceramic composites.",
+    "function": "Composites.",
+    "size": [
+      3,
+      3
+    ],
+    "power_kw": 240.0,
+    "power_type": "electrical",
+    "recipe_categories": [
+      "composites"
+    ],
+    "fluid_ports": [],
+    "technology_unlock": "era1_tech_polymer_science",
+    "purity_behavior": "Grade sensitive",
+    "maintenance": "Layup waste",
+    "upgrade_path": "Mk2",
+    "animation": "Layup table",
+    "placeable": true
+  },
+  {
+    "id": "era1_machine_conductive_drill_mk1",
+    "name": "Conductive Extraction Drill Mk1",
+    "category": "extraction",
+    "tier": 1,
+    "description": "Specialized drill for conductive mineral veins.",
+    "function": "Extract conductive ore.",
+    "size": [
+      3,
+      3
+    ],
+    "power_kw": 60.0,
+    "power_type": "electrical",
+    "recipe_categories": [
+      "mining",
+      "conductive_extraction"
+    ],
+    "fluid_ports": [],
+    "technology_unlock": "era1_tech_basic_recovery",
+    "purity_behavior": "Vein purity maps to ore purity for later acid purification bonus.",
+    "maintenance": "Standard mining wear; conductive dust increases filter clog rate.",
+    "upgrade_path": "Mk2 \u2014 higher richness utilization, less mineral dust byproduct downstream",
+    "animation": "Spiral bit + conductive spark accents",
+    "placeable": true
+  },
+  {
+    "id": "era1_machine_construction_fabricator",
+    "name": "Construction Fabricator",
+    "category": "manufacturing",
+    "tier": 2,
+    "description": "Produces construction site kits, scaffolds, barriers.",
+    "function": "Construction parts.",
+    "size": [
+      3,
+      3
+    ],
+    "power_kw": 200.0,
+    "power_type": "electrical",
+    "recipe_categories": [
+      "construction"
+    ],
+    "fluid_ports": [],
+    "technology_unlock": "era1_tech_advanced_automation",
+    "purity_behavior": "N/A",
+    "maintenance": "Standard.",
+    "upgrade_path": "Mk2",
+    "animation": "Panel stapler",
+    "placeable": true
+  },
+  {
+    "id": "era1_machine_construction_site",
+    "name": "Construction Site",
+    "category": "manufacturing",
+    "tier": 3,
+    "description": "World site for Nexus multi-stage construction recipes.",
+    "function": "Nexus construction.",
+    "size": [
+      10,
+      10
+    ],
+    "power_kw": 2000.0,
+    "power_type": "electrical",
+    "recipe_categories": [
+      "nexus_construction"
+    ],
+    "fluid_ports": [],
+    "technology_unlock": "era1_tech_nexus_construction",
+    "purity_behavior": "N/A",
+    "maintenance": "Scaffolding phases",
+    "upgrade_path": "\u2014",
+    "animation": "Cranes + hologram",
+    "placeable": true
+  },
+  {
+    "id": "era1_machine_conveyor_fabricator",
+    "name": "Conveyor Fabricator",
+    "category": "logistics",
+    "tier": 1,
+    "description": "Crafts belt segments and belt accessories (optional dedicated crafter; recipes also in assemblers).",
+    "function": "Logistics part crafting.",
+    "size": [
+      3,
+      2
+    ],
+    "power_kw": 100.0,
+    "power_type": "electrical",
+    "recipe_categories": [
+      "logistics_fab"
+    ],
+    "fluid_ports": [],
+    "technology_unlock": "era1_tech_industrial_automation",
+    "purity_behavior": "N/A",
+    "maintenance": "Standard.",
+    "upgrade_path": "Mk2",
+    "animation": "Belt extrude",
+    "placeable": true
+  },
+  {
+    "id": "era1_machine_crusher_mk1",
+    "name": "Crusher Mk1",
+    "category": "processing",
+    "tier": 1,
+    "description": "Jaw/impact crusher that breaks raw ore into crushed feedstock and mineral dust.",
+    "function": "Primary size reduction for all solid ores.",
+    "size": [
+      3,
+      3
+    ],
+    "power_kw": 120.0,
+    "power_type": "mechanical",
+    "recipe_categories": [
+      "crushing"
+    ],
+    "fluid_ports": [],
+    "technology_unlock": "era1_tech_material_processing",
+    "purity_behavior": "No purity gain. Splits mass into product + waste dust.",
+    "maintenance": "Jaw plates wear; throughput falls until replaced.",
+    "upgrade_path": "Mk2 \u2014 +throughput, -waste dust, unlocks finer crush recipes",
+    "animation": "Oscillating jaws + dust burst",
+    "placeable": true
+  },
+  {
+    "id": "era1_machine_defense_assembly_machine",
+    "name": "Radar Construction Unit / Defense Assembly Machine",
+    "category": "military",
+    "tier": 2,
+    "description": "Builds radar, repair stations, defense support buildings.",
+    "function": "Defense support construction.",
+    "size": [
+      4,
+      3
+    ],
+    "power_kw": 350.0,
+    "power_type": "electrical",
+    "recipe_categories": [
+      "defense_support"
+    ],
+    "fluid_ports": [],
+    "technology_unlock": "era1_tech_defense_industry",
+    "purity_behavior": "N/A",
+    "maintenance": "Standard.",
+    "upgrade_path": "Mk2",
+    "animation": "Dish assemble",
+    "placeable": true
+  },
+  {
+    "id": "era1_machine_defense_fabricator",
+    "name": "Defense Fabricator",
+    "category": "military",
+    "tier": 2,
+    "description": "Builds walls, gates, non-turret defense structures.",
+    "function": "Defense structures.",
+    "size": [
+      3,
+      3
+    ],
+    "power_kw": 240.0,
+    "power_type": "electrical",
+    "recipe_categories": [
+      "defense_fab"
+    ],
+    "fluid_ports": [],
+    "technology_unlock": "era1_tech_defense_industry",
+    "purity_behavior": "N/A",
+    "maintenance": "Standard.",
+    "upgrade_path": "Mk2",
+    "animation": "Panel press",
+    "placeable": true
+  },
+  {
+    "id": "era1_machine_distillation_tower_mk1",
+    "name": "Distillation Tower Mk1",
+    "category": "chemical",
+    "tier": 2,
+    "description": "Fractions raw hydrocarbon.",
+    "function": "Oil refining.",
+    "size": [
+      3,
+      6
+    ],
+    "power_kw": 350.0,
+    "power_type": "thermal",
+    "recipe_categories": [
+      "distillation"
+    ],
+    "fluid_ports": [
+      "in:raw",
+      "out:heavy",
+      "out:medium",
+      "out:light",
+      "out:gas"
+    ],
+    "technology_unlock": "era1_tech_hydrocarbon_refining",
+    "purity_behavior": "Purity shifts ratios.",
+    "maintenance": "Tray fouling/fire hazard.",
+    "upgrade_path": "Mk2",
+    "animation": "Tall tower",
+    "placeable": true
+  },
+  {
+    "id": "era1_machine_electrochemical_separator_mk1",
+    "name": "Electrochemical Separator Mk1",
+    "category": "chemical",
+    "tier": 2,
+    "description": "Water electrolysis to H2/O2.",
+    "function": "Electrolysis.",
+    "size": [
+      3,
+      3
+    ],
+    "power_kw": 450.0,
+    "power_type": "electrical",
+    "recipe_categories": [
+      "electrolysis"
+    ],
+    "fluid_ports": [
+      "in:water",
+      "out:h2",
+      "out:o2"
+    ],
+    "technology_unlock": "era1_tech_fluid_engineering",
+    "purity_behavior": "Needs clean water.",
+    "maintenance": "Electrode wear.",
+    "upgrade_path": "Mk2",
+    "animation": "Electrolyzer glow",
+    "placeable": true
+  },
+  {
+    "id": "era1_machine_electronics_assembler_mk1",
+    "name": "Electronics Assembler Mk1",
+    "category": "electronics",
+    "tier": 1,
+    "description": "Assembles modules from circuits (sensors, regulators, boards).",
+    "function": "Electronics assembly.",
+    "size": [
+      3,
+      3
+    ],
+    "power_kw": 160.0,
+    "power_type": "electrical",
+    "recipe_categories": [
+      "electronics_assembly"
+    ],
+    "fluid_ports": [],
+    "technology_unlock": "era1_tech_electronics",
+    "purity_behavior": "N/A",
+    "maintenance": "ESD care",
+    "upgrade_path": "Mk2",
+    "animation": "Pick-and-place",
+    "placeable": true
+  },
+  {
+    "id": "era1_machine_electronics_printer_mk1",
+    "name": "Electronics Printer Mk1",
+    "category": "electronics",
+    "tier": 1,
+    "description": "Prints basic substrates and simple modules.",
+    "function": "Entry electronics.",
+    "size": [
+      3,
+      3
+    ],
+    "power_kw": 180.0,
+    "power_type": "electrical",
+    "recipe_categories": [
+      "electronics_print"
+    ],
+    "fluid_ports": [
+      "in:upw optional"
+    ],
+    "technology_unlock": "era1_tech_electronics",
+    "purity_behavior": "Prefers higher purity silicon.",
+    "maintenance": "Nozzle clog.",
+    "upgrade_path": "Mk2",
+    "animation": "Print gantry",
+    "placeable": true
+  },
+  {
+    "id": "era1_machine_electronics_printer_mk2",
+    "name": "Electronics Printer Mk2",
+    "category": "electronics",
+    "tier": 2,
+    "description": "Logic boards, data storage, controllers.",
+    "function": "Mid electronics.",
+    "size": [
+      3,
+      3
+    ],
+    "power_kw": 320.0,
+    "power_type": "electrical",
+    "recipe_categories": [
+      "advanced_electronics"
+    ],
+    "fluid_ports": [
+      "in:cleaning_fluid"
+    ],
+    "technology_unlock": "era1_tech_advanced_electronics",
+    "purity_behavior": "Purity floors on wafers.",
+    "maintenance": "Cleanroom filters.",
+    "upgrade_path": "Mk3",
+    "animation": "Multi-layer print",
+    "placeable": true
+  },
+  {
+    "id": "era1_machine_electronics_printer_mk3",
+    "name": "Circuit Printer Mk2 / Electronics Printer Mk3",
+    "category": "electronics",
+    "tier": 3,
+    "description": "High-density circuits and late modules (covers Mk2 circuit + Mk3 electronics roles).",
+    "function": "Late electronics.",
+    "size": [
+      4,
+      3
+    ],
+    "power_kw": 700.0,
+    "power_type": "electrical",
+    "recipe_categories": [
+      "high_density_electronics"
+    ],
+    "fluid_ports": [
+      "in:upw"
+    ],
+    "technology_unlock": "era1_tech_advanced_electronics",
+    "purity_behavior": "Strict purity.",
+    "maintenance": "Expensive calibration.",
+    "upgrade_path": "Era2 lithography",
+    "animation": "Cleanroom flash",
+    "placeable": true
+  },
+  {
+    "id": "era1_machine_energy_facility",
+    "name": "Energy Facility",
+    "category": "power",
+    "tier": 3,
+    "description": "Builds Nexus power cores and heavy energy systems.",
+    "function": "Nexus energy crafting.",
+    "size": [
+      6,
+      6
+    ],
+    "power_kw": 1000.0,
+    "power_type": "electrical",
+    "recipe_categories": [
+      "nexus_power"
+    ],
+    "fluid_ports": [],
+    "technology_unlock": "era1_tech_nexus_construction",
+    "purity_behavior": "N/A",
+    "maintenance": "High voltage safety",
+    "upgrade_path": "\u2014",
+    "animation": "Arc flashes",
+    "placeable": true
+  },
+  {
+    "id": "era1_machine_ferrite_drill_mk1",
+    "name": "Ferrite Extraction Drill Mk1",
+    "category": "extraction",
+    "tier": 1,
+    "description": "Heavy drill head that taps ferrite veins and ejects ore onto belts.",
+    "function": "Extract ferrite ore from planetary veins.",
+    "size": [
+      3,
+      3
+    ],
+    "power_kw": 50.0,
+    "power_type": "electrical",
+    "recipe_categories": [
+      "mining",
+      "ferrite_extraction"
+    ],
+    "fluid_ports": [],
+    "technology_unlock": "era1_tech_basic_recovery",
+    "purity_behavior": "Deposit purity copied to ore. High purity = more concentrate potential, less tailings after crush.",
+    "maintenance": "Wear rises on low-stability veins; downtime spikes when stability < 40%.",
+    "upgrade_path": "era1_machine_ferrite_drill_mk2 \u2014 +yield, +4% purity preservation, lower wear",
+    "animation": "Rotating excavation head + dust plume",
+    "placeable": true
+  },
+  {
+    "id": "era1_machine_fiber_processor_mk1",
+    "name": "Fiber Processor Mk1",
+    "category": "chemical",
+    "tier": 2,
+    "description": "Spins synthetic fiber.",
+    "function": "Fibers.",
+    "size": [
+      3,
+      3
+    ],
+    "power_kw": 220.0,
+    "power_type": "electrical",
+    "recipe_categories": [
+      "fibers"
+    ],
+    "fluid_ports": [],
+    "technology_unlock": "era1_tech_polymer_science",
+    "purity_behavior": "N/A",
+    "maintenance": "Spinneret clogs",
+    "upgrade_path": "Mk2",
+    "animation": "Spools",
+    "placeable": true
+  },
+  {
+    "id": "era1_machine_fluid_processor_mk1",
+    "name": "Fluid Processor Mk1",
+    "category": "chemical",
+    "tier": 1,
+    "description": "Blends coolants and conditioned fluids.",
+    "function": "Fluid finishing.",
+    "size": [
+      3,
+      2
+    ],
+    "power_kw": 180.0,
+    "power_type": "electrical",
+    "recipe_categories": [
+      "fluid_processing"
+    ],
+    "fluid_ports": [
+      "in:a",
+      "in:b",
+      "out:product"
+    ],
+    "technology_unlock": "era1_tech_chemical_manufacturing",
+    "purity_behavior": "Slight purity raise.",
+    "maintenance": "Seal wear.",
+    "upgrade_path": "Mk2",
+    "animation": "Inline mixer",
+    "placeable": true
+  },
+  {
+    "id": "era1_machine_fluid_pump_mk1",
+    "name": "Pump Station",
+    "category": "logistics",
+    "tier": 1,
+    "description": "Moves fluids through pipes; boosts pressure.",
+    "function": "Fluid transport.",
+    "size": [
+      1,
+      2
+    ],
+    "power_kw": 60.0,
+    "power_type": "electrical",
+    "recipe_categories": [
+      "pumping"
+    ],
+    "fluid_ports": [
+      "in:fluid",
+      "out:fluid"
+    ],
+    "technology_unlock": "era1_tech_fluid_engineering",
+    "purity_behavior": "N/A",
+    "maintenance": "Cavitation if starved.",
+    "upgrade_path": "Mk2",
+    "animation": "Impeller",
+    "placeable": true
+  },
+  {
+    "id": "era1_machine_gas_compressor",
+    "name": "Gas Compressor Mk1",
+    "category": "chemical",
+    "tier": 2,
+    "description": "Compresses gases for storage/reactors.",
+    "function": "Gas pressure boosting.",
+    "size": [
+      2,
+      3
+    ],
+    "power_kw": 300.0,
+    "power_type": "electrical",
+    "recipe_categories": [
+      "gas_compression"
+    ],
+    "fluid_ports": [
+      "in:gas",
+      "out:gas"
+    ],
+    "technology_unlock": "era1_tech_fluid_engineering",
+    "purity_behavior": "N/A",
+    "maintenance": "Overheat if blocked.",
+    "upgrade_path": "Mk2",
+    "animation": "Turbine",
+    "placeable": true
+  },
+  {
+    "id": "era1_machine_heat_treatment_furnace_mk1",
+    "name": "Heat Treatment Furnace Mk1",
+    "category": "processing",
+    "tier": 2,
+    "description": "Hardens and stress-relieves alloys.",
+    "function": "Hardened steel / heat-treated paths.",
+    "size": [
+      4,
+      3
+    ],
+    "power_kw": 700.0,
+    "power_type": "thermal",
+    "recipe_categories": [
+      "heat_treatment"
+    ],
+    "fluid_ports": [],
+    "technology_unlock": "era1_tech_advanced_metallurgy",
+    "purity_behavior": "Improves grade; minimal purity change.",
+    "maintenance": "Quench media contamination if shared with chem lines.",
+    "upgrade_path": "Mk2 \u2014 tighter grade control",
+    "animation": "Chamber doors + quench hiss",
+    "placeable": true
+  },
+  {
+    "id": "era1_machine_heavy_assembler_mk1",
+    "name": "Heavy Assembler",
+    "category": "manufacturing",
+    "tier": 2,
+    "description": "Builds oversized frames, crushers, heavy machines.",
+    "function": "Heavy manufacturing.",
+    "size": [
+      4,
+      4
+    ],
+    "power_kw": 400.0,
+    "power_type": "electrical",
+    "recipe_categories": [
+      "heavy_assembly"
+    ],
+    "fluid_ports": [],
+    "technology_unlock": "era1_tech_advanced_metallurgy",
+    "purity_behavior": "N/A",
+    "maintenance": "Crane stress.",
+    "upgrade_path": "Mk2",
+    "animation": "Overhead crane",
+    "placeable": true
+  },
+  {
+    "id": "era1_machine_heavy_fabricator",
+    "name": "Heavy Fabricator",
+    "category": "manufacturing",
+    "tier": 3,
+    "description": "Constructs Nexus-scale modules and mega parts.",
+    "function": "Late/heavy fabrication.",
+    "size": [
+      5,
+      5
+    ],
+    "power_kw": 1200.0,
+    "power_type": "electrical",
+    "recipe_categories": [
+      "nexus_fab",
+      "heavy_fab"
+    ],
+    "fluid_ports": [],
+    "technology_unlock": "era1_tech_nexus_construction",
+    "purity_behavior": "N/A",
+    "maintenance": "Requires cooling loop nearby.",
+    "upgrade_path": "Era2 fabricator",
+    "animation": "Gantry system",
+    "placeable": true
+  },
+  {
+    "id": "era1_machine_hydraulic_press_mk1",
+    "name": "Industrial Press / Hydraulic Press Mk1",
+    "category": "processing",
+    "tier": 2,
+    "description": "Compacts powders into blocks and structural forms.",
+    "function": "Metal powder compaction and panel pressing.",
+    "size": [
+      3,
+      3
+    ],
+    "power_kw": 300.0,
+    "power_type": "mechanical",
+    "recipe_categories": [
+      "pressing"
+    ],
+    "fluid_ports": [
+      "in:lubricant optional"
+    ],
+    "technology_unlock": "era1_tech_advanced_metallurgy",
+    "purity_behavior": "Grade rises with slow press profiles.",
+    "maintenance": "Hydraulic leaks on poor maintenance.",
+    "upgrade_path": "Mk2 \u2014 dual die, higher grade chance",
+    "animation": "Ram stamp",
+    "placeable": true
+  },
+  {
+    "id": "era1_machine_hydrocarbon_pump_mk1",
+    "name": "Hydrocarbon Pump Mk1",
+    "category": "extraction",
+    "tier": 1,
+    "description": "Pumpjack-style extractor for underground hydrocarbon seams.",
+    "function": "Extract raw hydrocarbon fluid.",
+    "size": [
+      3,
+      5
+    ],
+    "power_kw": 100.0,
+    "power_type": "electrical",
+    "recipe_categories": [
+      "fluid_extraction",
+      "hydrocarbon"
+    ],
+    "fluid_ports": [
+      "out:raw_hydrocarbon"
+    ],
+    "technology_unlock": "era1_tech_fluid_engineering",
+    "purity_behavior": "Controls fraction quality after distillation (light/medium/heavy balance).",
+    "maintenance": "Seals degrade faster on low-stability seams; leak events raise hazard.",
+    "upgrade_path": "Mk2 \u2014 higher flow, better fraction purity bias",
+    "animation": "Nodding pump arm + pipe pulse",
+    "placeable": true
+  },
+  {
+    "id": "era1_machine_industrial_grinder_mk1",
+    "name": "Industrial Grinder Mk1",
+    "category": "processing",
+    "tier": 1,
+    "description": "Fine grinding mill for powders (silicon, metal, ferrite).",
+    "function": "Powder production for smelting and electronics.",
+    "size": [
+      3,
+      3
+    ],
+    "power_kw": 150.0,
+    "power_type": "mechanical",
+    "recipe_categories": [
+      "grinding"
+    ],
+    "fluid_ports": [],
+    "technology_unlock": "era1_tech_material_processing",
+    "purity_behavior": "Preserves purity; slight loss if overfed.",
+    "maintenance": "Media balls wear; contamination risk if mixed recipes without flush.",
+    "upgrade_path": "Mk2 \u2014 +purity preservation, auto-flush",
+    "animation": "Rotating drum",
+    "placeable": true
+  },
+  {
+    "id": "era1_machine_laboratory_module",
+    "name": "Data Analysis Core / Laboratory Module",
+    "category": "research",
+    "tier": 2,
+    "description": "Expandable analysis core for advanced research recipes.",
+    "function": "Advanced research.",
+    "size": [
+      3,
+      3
+    ],
+    "power_kw": 350.0,
+    "power_type": "electrical",
+    "recipe_categories": [
+      "advanced_research"
+    ],
+    "fluid_ports": [],
+    "technology_unlock": "era1_tech_research_infrastructure",
+    "purity_behavior": "N/A",
+    "maintenance": "Heat density.",
+    "upgrade_path": "Mk2",
+    "animation": "Core glow",
+    "placeable": true
+  },
+  {
+    "id": "era1_machine_laser_turret",
+    "name": "Laser Turret",
+    "category": "military",
+    "tier": 1,
+    "description": "Laser Turret",
+    "function": "Laser Turret",
+    "size": [
+      2,
+      2
+    ],
+    "power_kw": 200,
+    "power_type": "electrical",
+    "recipe_categories": [
+      "defense"
+    ],
+    "fluid_ports": [],
+    "technology_unlock": "era1_tech_laser_defense",
+    "purity_behavior": "",
+    "maintenance": "",
+    "upgrade_path": "",
+    "animation": "",
+    "placeable": true
+  },
+  {
+    "id": "era1_machine_logistics_controller",
+    "name": "Logistics Controller Hub",
+    "category": "logistics",
+    "tier": 2,
+    "description": "Placeable controller building hosting logistic controller logic.",
+    "function": "Logistics network brain.",
+    "size": [
+      2,
+      2
+    ],
+    "power_kw": 80.0,
+    "power_type": "electrical",
+    "recipe_categories": [
+      "logistics_control"
+    ],
+    "fluid_ports": [],
+    "technology_unlock": "era1_tech_systems_science",
+    "purity_behavior": "N/A",
+    "maintenance": "Firmware.",
+    "upgrade_path": "Mk2",
+    "animation": "Antenna blink",
+    "placeable": true
+  },
+  {
+    "id": "era1_machine_machine_fabricator_mk1",
+    "name": "Machine Fabricator",
+    "category": "manufacturing",
+    "tier": 2,
+    "description": "Builds other production machines from housings/controllers.",
+    "function": "Machine replication.",
+    "size": [
+      4,
+      4
+    ],
+    "power_kw": 350.0,
+    "power_type": "electrical",
+    "recipe_categories": [
+      "machine_fab"
+    ],
+    "fluid_ports": [],
+    "technology_unlock": "era1_tech_industrial_automation",
+    "purity_behavior": "N/A",
+    "maintenance": "Complex recipe setups.",
+    "upgrade_path": "Mk2",
+    "animation": "Internal assembler bay",
+    "placeable": true
+  },
+  {
+    "id": "era1_machine_material_processor_mk1",
+    "name": "Material Dryer / Processor Mk1",
+    "category": "processing",
+    "tier": 1,
+    "description": "Dries purified solids into powders (legacy name: Material Processor).",
+    "function": "Ferrite drying and general solids prep.",
+    "size": [
+      3,
+      2
+    ],
+    "power_kw": 100.0,
+    "power_type": "electrical",
+    "recipe_categories": [
+      "drying",
+      "material_prep"
+    ],
+    "fluid_ports": [],
+    "technology_unlock": "era1_tech_material_processing",
+    "purity_behavior": "Preserves purity.",
+    "maintenance": "Heater coils scale with wet feed.",
+    "upgrade_path": "Mk2 \u2014 faster dry, less energy",
+    "animation": "Conveyor through heated tunnel",
+    "placeable": true
+  },
+  {
+    "id": "era1_machine_military_assembly_bay_mk1",
+    "name": "Military Assembly Bay",
+    "category": "military",
+    "tier": 2,
+    "description": "Final assembly for turrets (shared ID with M050 role; primary military assembler).",
+    "function": "Turret/defense assembly.",
+    "size": [
+      5,
+      5
+    ],
+    "power_kw": 600.0,
+    "power_type": "electrical",
+    "recipe_categories": [
+      "military_assembly"
+    ],
+    "fluid_ports": [],
+    "technology_unlock": "era1_tech_defense_industry",
+    "purity_behavior": "N/A",
+    "maintenance": "Security lockdown mode.",
+    "upgrade_path": "Mk2",
+    "animation": "Assembly gantry",
+    "placeable": true
+  },
+  {
+    "id": "era1_machine_military_fabricator_mk1",
+    "name": "Military Fabricator",
+    "category": "manufacturing",
+    "tier": 2,
+    "description": "Builds weapon housings, frames, wall kits.",
+    "function": "Military structures/parts.",
+    "size": [
+      4,
+      3
+    ],
+    "power_kw": 320.0,
+    "power_type": "electrical",
+    "recipe_categories": [
+      "military_fab"
+    ],
+    "fluid_ports": [],
+    "technology_unlock": "era1_tech_defense_industry",
+    "purity_behavior": "N/A",
+    "maintenance": "Secure recipe lock optional.",
+    "upgrade_path": "Mk2",
+    "animation": "Armored bay doors",
+    "placeable": true
+  },
+  {
+    "id": "era1_machine_missile_factory_mk1",
+    "name": "Missile Factory",
+    "category": "manufacturing",
+    "tier": 3,
+    "description": "Assembles guided missiles.",
+    "function": "Missile production.",
+    "size": [
+      4,
+      4
+    ],
+    "power_kw": 450.0,
+    "power_type": "electrical",
+    "recipe_categories": [
+      "missiles"
+    ],
+    "fluid_ports": [
+      "in:propellant"
+    ],
+    "technology_unlock": "era1_tech_defense_industry",
+    "purity_behavior": "Requires targeting modules of sufficient grade.",
+    "maintenance": "High security maintenance.",
+    "upgrade_path": "Mk2",
+    "animation": "Rail assembly",
+    "placeable": true
+  },
+  {
+    "id": "era1_machine_motor_assembly_mk1",
+    "name": "Motor Assembly Machine Mk1",
+    "category": "manufacturing",
+    "tier": 2,
+    "description": "Builds industrial/heavy motors and rotation motors.",
+    "function": "Motors.",
+    "size": [
+      3,
+      3
+    ],
+    "power_kw": 200.0,
+    "power_type": "electrical",
+    "recipe_categories": [
+      "motors"
+    ],
+    "fluid_ports": [],
+    "technology_unlock": "era1_tech_industrial_automation",
+    "purity_behavior": "Grade precision helps",
+    "maintenance": "Balancing needed",
+    "upgrade_path": "Mk2",
+    "animation": "Rotor spin",
+    "placeable": true
+  },
+  {
+    "id": "era1_machine_ore_purifier_mk1",
+    "name": "Ore Purifier Mk1",
+    "category": "processing",
+    "tier": 1,
+    "description": "Washes/separates crushed ore using water or acid.",
+    "function": "Raises purity and ejects slurry/tailings.",
+    "size": [
+      3,
+      4
+    ],
+    "power_kw": 200.0,
+    "power_type": "electrical",
+    "recipe_categories": [
+      "purification"
+    ],
+    "fluid_ports": [
+      "in:fluid",
+      "out:slurry"
+    ],
+    "technology_unlock": "era1_tech_material_processing",
+    "purity_behavior": "+8 to +12% purity depending on recipe.",
+    "maintenance": "Filter cakes clog; acid recipes raise corrosion wear.",
+    "upgrade_path": "Advanced Purifier Mk1",
+    "animation": "Agitated tanks + overflow weir",
+    "placeable": true
+  },
+  {
+    "id": "era1_machine_ore_washer_mk1",
+    "name": "Ore Washer Mk1",
+    "category": "processing",
+    "tier": 1,
+    "description": "Auto machine for era1_machine_ore_washer_mk1",
+    "function": "",
+    "size": [
+      3,
+      3
+    ],
+    "power_kw": 150,
+    "power_type": "electrical",
+    "recipe_categories": [
+      "processing"
+    ],
+    "fluid_ports": [],
+    "technology_unlock": "era1_tech_material_processing",
+    "purity_behavior": "",
+    "maintenance": "",
+    "upgrade_path": "",
+    "animation": "",
+    "placeable": true
+  },
+  {
+    "id": "era1_machine_pipe_junction",
+    "name": "Pipe Junction",
+    "category": "logistics",
+    "tier": 1,
+    "description": "Multi-way pipe junction building.",
+    "function": "Pipe routing.",
+    "size": [
+      1,
+      1
+    ],
+    "power_kw": 0.0,
+    "power_type": "none",
+    "recipe_categories": [
+      "piping"
+    ],
+    "fluid_ports": [
+      "multi"
+    ],
+    "technology_unlock": "era1_tech_fluid_engineering",
+    "purity_behavior": "N/A",
+    "maintenance": "Clogs.",
+    "upgrade_path": "Smart junction",
+    "animation": "Flow arrows",
+    "placeable": true
+  },
+  {
+    "id": "era1_machine_planetary_nexus",
+    "name": "Planetary Fabrication Nexus",
+    "category": "nexus",
+    "tier": 1,
+    "description": "Planetary Fabrication Nexus",
+    "function": "Planetary Fabrication Nexus",
+    "size": [
+      20,
+      20
+    ],
+    "power_kw": 0,
+    "power_type": "electrical",
+    "recipe_categories": [
+      "nexus"
+    ],
+    "fluid_ports": [],
+    "technology_unlock": "era1_tech_era_transition",
+    "purity_behavior": "",
+    "maintenance": "",
+    "upgrade_path": "",
+    "animation": "",
+    "placeable": true
+  },
+  {
+    "id": "era1_machine_polymer_reactor_mk1",
+    "name": "Polymer Reactor Mk1",
+    "category": "chemical",
+    "tier": 1,
+    "description": "Polymerizes feedstock into resin/rubber/mixes.",
+    "function": "Polymer backbone.",
+    "size": [
+      3,
+      4
+    ],
+    "power_kw": 280.0,
+    "power_type": "electrical",
+    "recipe_categories": [
+      "polymers"
+    ],
+    "fluid_ports": [
+      "in:feed",
+      "out:polymer"
+    ],
+    "technology_unlock": "era1_tech_polymer_science",
+    "purity_behavior": "Clean feed \u2192 higher grade.",
+    "maintenance": "Viscous fouling.",
+    "upgrade_path": "Mk2",
+    "animation": "Extruder",
+    "placeable": true
+  },
+  {
+    "id": "era1_machine_polymer_reactor_mk2",
+    "name": "Polymer Reactor Mk2",
+    "category": "chemical",
+    "tier": 2,
+    "description": "Advanced polymer blends with fiber.",
+    "function": "Advanced polymers.",
+    "size": [
+      4,
+      4
+    ],
+    "power_kw": 550.0,
+    "power_type": "electrical",
+    "recipe_categories": [
+      "advanced_polymers"
+    ],
+    "fluid_ports": [
+      "in:feed",
+      "out:polymer"
+    ],
+    "technology_unlock": "era1_tech_polymer_science",
+    "purity_behavior": "+grade.",
+    "maintenance": "Die swaps.",
+    "upgrade_path": "Mk3",
+    "animation": "Multi-die",
+    "placeable": true
+  },
+  {
+    "id": "era1_machine_power_component_factory_mk1",
+    "name": "Power Component Factory",
+    "category": "electronics",
+    "tier": 2,
+    "description": "Transformers, relays, HV parts, conduits.",
+    "function": "Power components.",
+    "size": [
+      3,
+      4
+    ],
+    "power_kw": 280.0,
+    "power_type": "electrical",
+    "recipe_categories": [
+      "power_components"
+    ],
+    "fluid_ports": [],
+    "technology_unlock": "era1_tech_power_systems",
+    "purity_behavior": "N/A",
+    "maintenance": "Copper winding scrap.",
+    "upgrade_path": "Mk2",
+    "animation": "Coil winders",
+    "placeable": true
+  },
+  {
+    "id": "era1_machine_precision_alloy_furnace_mk1",
+    "name": "Precision Alloy Furnace Mk1",
+    "category": "processing",
+    "tier": 3,
+    "description": "Tight-tolerance alloy furnace for precision/heat-treated alloys.",
+    "function": "Late metallurgy specialty products.",
+    "size": [
+      4,
+      4
+    ],
+    "power_kw": 900.0,
+    "power_type": "thermal",
+    "recipe_categories": [
+      "precision_alloying"
+    ],
+    "fluid_ports": [
+      "in:catalyst"
+    ],
+    "technology_unlock": "era1_tech_precision_manufacturing",
+    "purity_behavior": "+grade; rejects batches below purity floor.",
+    "maintenance": "High calibration drift \u2014 needs calibration station periodically.",
+    "upgrade_path": "Mk2 \u2014 auto-calibrate",
+    "animation": "Sealed vacuum glow",
+    "placeable": true
+  },
+  {
+    "id": "era1_machine_precision_component_fabricator_mk1",
+    "name": "Precision Component Fabricator Mk1",
+    "category": "manufacturing",
+    "tier": 2,
+    "description": "Electronics printer parts and precision kits.",
+    "function": "Precision kits.",
+    "size": [
+      3,
+      3
+    ],
+    "power_kw": 200.0,
+    "power_type": "electrical",
+    "recipe_categories": [
+      "precision_kits"
+    ],
+    "fluid_ports": [],
+    "technology_unlock": "era1_tech_electronics",
+    "purity_behavior": "Precision grade",
+    "maintenance": "Calibration",
+    "upgrade_path": "Mk2",
+    "animation": "Micro arms",
+    "placeable": true
+  },
+  {
+    "id": "era1_machine_precision_fabricator_mk1",
+    "name": "Precision Fabricator Mk1",
+    "category": "manufacturing",
+    "tier": 2,
+    "description": "Tight-tolerance parts: heat exchangers, lenses, precision housings.",
+    "function": "Precision manufacturing.",
+    "size": [
+      3,
+      3
+    ],
+    "power_kw": 280.0,
+    "power_type": "electrical",
+    "recipe_categories": [
+      "precision_fab"
+    ],
+    "fluid_ports": [],
+    "technology_unlock": "era1_tech_precision_manufacturing",
+    "purity_behavior": "Enforces purity floors on optical recipes.",
+    "maintenance": "Calibration drift.",
+    "upgrade_path": "Mk2",
+    "animation": "Laser etcher accents",
+    "placeable": true
+  },
+  {
+    "id": "era1_machine_precision_roller_mk1",
+    "name": "Material Roller / Precision Roller Mk1",
+    "category": "processing",
+    "tier": 2,
+    "description": "Rolls plates into foils and sheets.",
+    "function": "Conductive foil and sheet products.",
+    "size": [
+      3,
+      4
+    ],
+    "power_kw": 220.0,
+    "power_type": "electrical",
+    "recipe_categories": [
+      "rolling"
+    ],
+    "fluid_ports": [],
+    "technology_unlock": "era1_tech_electronics",
+    "purity_behavior": "High purity in \u2192 high purity foil out.",
+    "maintenance": "Roll scoring if contaminated feed.",
+    "upgrade_path": "Mk2 \u2014 thinner gauges, less scrap",
+    "animation": "Paired rollers",
+    "placeable": true
+  },
+  {
+    "id": "era1_machine_precision_water_processor_mk1",
+    "name": "Precision Water Processor Mk1",
+    "category": "chemical",
+    "tier": 2,
+    "description": "Ultra pure water / optical silicon wash.",
+    "function": "Precision water.",
+    "size": [
+      3,
+      3
+    ],
+    "power_kw": 350.0,
+    "power_type": "electrical",
+    "recipe_categories": [
+      "precision_water"
+    ],
+    "fluid_ports": [
+      "in:water",
+      "out:upw"
+    ],
+    "technology_unlock": "era1_tech_precision_chemistry",
+    "purity_behavior": "+25 purity",
+    "maintenance": "Cartridge logistics",
+    "upgrade_path": "Mk2",
+    "animation": "Sterile chamber",
+    "placeable": true
+  },
+  {
+    "id": "era1_machine_recovery_plant_mk1",
+    "name": "Recovery Plant Mk1",
+    "category": "processing",
+    "tier": 2,
+    "description": "Recovers metals from tailings using acid chemistry.",
+    "function": "Tailings \u2192 ferrite dust / conductive trace.",
+    "size": [
+      4,
+      4
+    ],
+    "power_kw": 350.0,
+    "power_type": "electrical",
+    "recipe_categories": [
+      "recovery"
+    ],
+    "fluid_ports": [
+      "in:acid",
+      "out:slurry"
+    ],
+    "technology_unlock": "era1_tech_waste_recovery",
+    "purity_behavior": "Outputs low-mid purity; useful feedstock, not premium.",
+    "maintenance": "Acid-proof liners wear; hazard events if ignored.",
+    "upgrade_path": "Mk2 \u2014 higher recovery %, less slurry",
+    "animation": "Bubbling leach tanks",
+    "placeable": true
+  },
+  {
+    "id": "era1_machine_recycling_plant_mk1",
+    "name": "Recycling Plant Mk1",
+    "category": "processing",
+    "tier": 2,
+    "description": "General recycler for carbon residue and polymer scrap.",
+    "function": "Waste loop closer.",
+    "size": [
+      4,
+      3
+    ],
+    "power_kw": 300.0,
+    "power_type": "electrical",
+    "recipe_categories": [
+      "recycling"
+    ],
+    "fluid_ports": [],
+    "technology_unlock": "era1_tech_waste_recovery",
+    "purity_behavior": "Recycled outputs slightly lower grade.",
+    "maintenance": "Shredder jams on mixed feeds.",
+    "upgrade_path": "Mk2 \u2014 auto-sort intake",
+    "animation": "Shredder + melt pot",
+    "placeable": true
+  },
+  {
+    "id": "era1_machine_reduction_furnace_mk1",
+    "name": "Reduction Furnace Mk1",
+    "category": "processing",
+    "tier": 2,
+    "description": "Produces reduced ferrite with carbon compound gas.",
+    "function": "Reduction metallurgy.",
+    "size": [
+      4,
+      3
+    ],
+    "power_kw": 650.0,
+    "power_type": "thermal",
+    "recipe_categories": [
+      "reduction"
+    ],
+    "fluid_ports": [
+      "in:gas"
+    ],
+    "technology_unlock": "era1_tech_advanced_metallurgy",
+    "purity_behavior": "+5 purity",
+    "maintenance": "Gas seals",
+    "upgrade_path": "Mk2",
+    "animation": "Reduction glow",
+    "placeable": true
+  },
+  {
+    "id": "era1_machine_reinforced_wall",
+    "name": "Reinforced Wall",
+    "category": "military",
+    "tier": 1,
+    "description": "Reinforced Wall",
+    "function": "Reinforced Wall",
+    "size": [
+      1,
+      1
+    ],
+    "power_kw": 0,
+    "power_type": "electrical",
+    "recipe_categories": [
+      "defense"
+    ],
+    "fluid_ports": [],
+    "technology_unlock": "era1_tech_defense_industry",
+    "purity_behavior": "",
+    "maintenance": "",
+    "upgrade_path": "",
+    "animation": "",
+    "placeable": true
+  },
+  {
+    "id": "era1_machine_repair_system_factory",
+    "name": "Repair System Factory",
+    "category": "military",
+    "tier": 2,
+    "description": "Produces repair drone cores/stations/packs.",
+    "function": "Repair systems.",
+    "size": [
+      3,
+      3
+    ],
+    "power_kw": 260.0,
+    "power_type": "electrical",
+    "recipe_categories": [
+      "repair_systems"
+    ],
+    "fluid_ports": [],
+    "technology_unlock": "era1_tech_defense_industry",
+    "purity_behavior": "N/A",
+    "maintenance": "Standard.",
+    "upgrade_path": "Mk2",
+    "animation": "Drone dock",
+    "placeable": true
+  },
+  {
+    "id": "era1_machine_research_analyzer",
+    "name": "Data Processor / Research Analyzer",
+    "category": "electronics",
+    "tier": 2,
+    "description": "Processes research samples and diagnostics (dual-use data processor).",
+    "function": "Data analysis hardware.",
+    "size": [
+      3,
+      2
+    ],
+    "power_kw": 250.0,
+    "power_type": "electrical",
+    "recipe_categories": [
+      "data_processing",
+      "research_support"
+    ],
+    "fluid_ports": [],
+    "technology_unlock": "era1_tech_research_infrastructure",
+    "purity_behavior": "N/A",
+    "maintenance": "Fan dust.",
+    "upgrade_path": "Mk2",
+    "animation": "Server blink",
+    "placeable": true
+  },
+  {
+    "id": "era1_machine_research_fabricator",
+    "name": "Research Fabricator",
+    "category": "research",
+    "tier": 2,
+    "description": "Crafts optimization modules and research hardware.",
+    "function": "Research manufacturing.",
+    "size": [
+      3,
+      3
+    ],
+    "power_kw": 220.0,
+    "power_type": "electrical",
+    "recipe_categories": [
+      "research_fab"
+    ],
+    "fluid_ports": [],
+    "technology_unlock": "era1_tech_systems_science",
+    "purity_behavior": "N/A",
+    "maintenance": "Standard",
+    "upgrade_path": "Mk2",
+    "animation": "Proto bench",
+    "placeable": true
+  },
+  {
+    "id": "era1_machine_research_laboratory",
+    "name": "Research Laboratory Mk1",
+    "category": "research",
+    "tier": 1,
+    "description": "Consumes industrial samples + data storage to produce science data packs.",
+    "function": "Primary research.",
+    "size": [
+      4,
+      4
+    ],
+    "power_kw": 200.0,
+    "power_type": "electrical",
+    "recipe_categories": [
+      "research"
+    ],
+    "fluid_ports": [],
+    "technology_unlock": "era1_tech_research_infrastructure",
+    "purity_behavior": "N/A",
+    "maintenance": "Instrument calibration.",
+    "upgrade_path": "Lab Module / Analyzer",
+    "animation": "Hologram samples",
+    "placeable": true
+  },
+  {
+    "id": "era1_machine_robotics_component_printer_mk1",
+    "name": "Robotics Component Printer",
+    "category": "manufacturing",
+    "tier": 2,
+    "description": "Prints joints, frames, end effectors.",
+    "function": "Robotics components.",
+    "size": [
+      3,
+      3
+    ],
+    "power_kw": 260.0,
+    "power_type": "electrical",
+    "recipe_categories": [
+      "robotics_components"
+    ],
+    "fluid_ports": [],
+    "technology_unlock": "era1_tech_robotics",
+    "purity_behavior": "N/A",
+    "maintenance": "Print bed leveling.",
+    "upgrade_path": "Mk2",
+    "animation": "Print head",
+    "placeable": true
+  },
+  {
+    "id": "era1_machine_robotics_factory_mk1",
+    "name": "Robotics Factory Mk1",
+    "category": "manufacturing",
+    "tier": 2,
+    "description": "Assembles drones, robot cores, chassis.",
+    "function": "Robotics production.",
+    "size": [
+      4,
+      4
+    ],
+    "power_kw": 400.0,
+    "power_type": "electrical",
+    "recipe_categories": [
+      "robotics"
+    ],
+    "fluid_ports": [],
+    "technology_unlock": "era1_tech_robotics",
+    "purity_behavior": "Grade precision preferred.",
+    "maintenance": "Firmware mismatches cause scrap.",
+    "upgrade_path": "Mk2",
+    "animation": "Robot weld sparks",
+    "placeable": true
+  },
+  {
+    "id": "era1_machine_semiconductor_processor",
+    "name": "Semiconductor Processor",
+    "category": "electronics",
+    "tier": 2,
+    "description": "Wafer processing (logic/memory/sensor wafers).",
+    "function": "Semiconductors.",
+    "size": [
+      3,
+      3
+    ],
+    "power_kw": 400.0,
+    "power_type": "electrical",
+    "recipe_categories": [
+      "semiconductors"
+    ],
+    "fluid_ports": [
+      "in:upw",
+      "in:cleaning"
+    ],
+    "technology_unlock": "era1_tech_advanced_electronics",
+    "purity_behavior": "+purity on success; scrap on fail.",
+    "maintenance": "Yield variance.",
+    "upgrade_path": "Mk2",
+    "animation": "Wafer arm",
+    "placeable": true
+  },
+  {
+    "id": "era1_machine_silicate_drill_mk1",
+    "name": "Silicate Extraction Drill Mk1",
+    "category": "extraction",
+    "tier": 1,
+    "description": "Rock drill for silicate formations.",
+    "function": "Extract silicate rock.",
+    "size": [
+      3,
+      3
+    ],
+    "power_kw": 55.0,
+    "power_type": "electrical",
+    "recipe_categories": [
+      "mining",
+      "silicate_extraction"
+    ],
+    "fluid_ports": [],
+    "technology_unlock": "era1_tech_basic_recovery",
+    "purity_behavior": "Higher purity improves glass/ceramic yields.",
+    "maintenance": "High vibration; unstable deposits cause intermittent jams.",
+    "upgrade_path": "Mk2 \u2014 reduced stone dust fraction after crush",
+    "animation": "Percussive hammer drill",
+    "placeable": true
+  },
+  {
+    "id": "era1_machine_solar_panel_mk1",
+    "name": "Solar Panel Mk1",
+    "category": "power",
+    "tier": 1,
+    "description": "Placeable solar generator.",
+    "function": "Solar power.",
+    "size": [
+      4,
+      3
+    ],
+    "power_kw": 0.0,
+    "power_type": "electrical_output",
+    "recipe_categories": [
+      "solar"
+    ],
+    "fluid_ports": [],
+    "technology_unlock": "era1_tech_power_systems",
+    "purity_behavior": "N/A",
+    "maintenance": "Dust on panels",
+    "upgrade_path": "Mk2",
+    "animation": "Sun track",
+    "placeable": true
+  },
+  {
+    "id": "era1_machine_sorting_machine",
+    "name": "Sorting Machine",
+    "category": "logistics",
+    "tier": 2,
+    "description": "Vision/filter sorter for items by type/purity/grade.",
+    "function": "Automated sorting.",
+    "size": [
+      3,
+      3
+    ],
+    "power_kw": 160.0,
+    "power_type": "electrical",
+    "recipe_categories": [
+      "sorting"
+    ],
+    "fluid_ports": [],
+    "technology_unlock": "era1_tech_advanced_automation",
+    "purity_behavior": "Can sort by purity/grade with probes.",
+    "maintenance": "Camera fouling.",
+    "upgrade_path": "Mk2",
+    "animation": "Divert arms",
+    "placeable": true
+  },
+  {
+    "id": "era1_machine_storage_container",
+    "name": "Storage Container",
+    "category": "logistics",
+    "tier": 1,
+    "description": "Solid item storage building (crafted entity).",
+    "function": "Item buffering.",
+    "size": [
+      2,
+      2
+    ],
+    "power_kw": 5.0,
+    "power_type": "electrical",
+    "recipe_categories": [
+      "storage"
+    ],
+    "fluid_ports": [],
+    "technology_unlock": "era1_tech_industrial_automation",
+    "purity_behavior": "N/A",
+    "maintenance": "None.",
+    "upgrade_path": "Smart Storage",
+    "animation": "Idle",
+    "placeable": true
+  },
+  {
+    "id": "era1_machine_storage_tank",
+    "name": "Fluid Storage Tank",
+    "category": "logistics",
+    "tier": 1,
+    "description": "Stores fluids/gases.",
+    "function": "Fluid buffering.",
+    "size": [
+      3,
+      3
+    ],
+    "power_kw": 10.0,
+    "power_type": "electrical",
+    "recipe_categories": [
+      "fluid_storage"
+    ],
+    "fluid_ports": [
+      "in/out:fluid"
+    ],
+    "technology_unlock": "era1_tech_fluid_engineering",
+    "purity_behavior": "Can track fluid purity averages.",
+    "maintenance": "Leak risk if damaged.",
+    "upgrade_path": "Mk2 larger",
+    "animation": "Tank gauge",
+    "placeable": true
+  },
+  {
+    "id": "era1_machine_tech_nexus_interface",
+    "name": "Technology Nexus Interface",
+    "category": "research",
+    "tier": 3,
+    "description": "Late research interface used with Nexus commissioning and Era transition.",
+    "function": "Era transition research interface.",
+    "size": [
+      3,
+      3
+    ],
+    "power_kw": 500.0,
+    "power_type": "electrical",
+    "recipe_categories": [
+      "nexus_research",
+      "era_transition"
+    ],
+    "fluid_ports": [],
+    "technology_unlock": "era1_tech_nexus_construction",
+    "purity_behavior": "N/A",
+    "maintenance": "Must be near Nexus.",
+    "upgrade_path": "Era2 uplink",
+    "animation": "Beam to Nexus",
+    "placeable": true
+  },
+  {
+    "id": "era1_machine_thermal_smelter_mk1",
+    "name": "Thermal Smelter Mk1",
+    "category": "processing",
+    "tier": 1,
+    "description": "Thermal furnace for plates from powders/concentrates.",
+    "function": "Core metallurgy machine.",
+    "size": [
+      3,
+      3
+    ],
+    "power_kw": 400.0,
+    "power_type": "thermal",
+    "recipe_categories": [
+      "smelting"
+    ],
+    "fluid_ports": [],
+    "technology_unlock": "era1_tech_basic_metallurgy",
+    "purity_behavior": "Slight purity loss (-1 to -3%) from oxidation unless reducing agents present.",
+    "maintenance": "Refractory wear; overheat if under-cooled.",
+    "upgrade_path": "Mk2 \u2014 less purity loss, slag recovery recipe",
+    "animation": "Glow core + pour spout",
+    "placeable": true
+  },
+  {
+    "id": "era1_machine_transport_hub",
+    "name": "Transport Hub",
+    "category": "logistics",
+    "tier": 2,
+    "description": "Hub for loaders/unloaders/drone pads linkage.",
+    "function": "Transport nexus.",
+    "size": [
+      4,
+      4
+    ],
+    "power_kw": 200.0,
+    "power_type": "electrical",
+    "recipe_categories": [
+      "transport"
+    ],
+    "fluid_ports": [],
+    "technology_unlock": "era1_tech_robotics",
+    "purity_behavior": "N/A",
+    "maintenance": "Traffic jams if undersized.",
+    "upgrade_path": "Mk2",
+    "animation": "Depot anim",
+    "placeable": true
+  },
+  {
+    "id": "era1_machine_turret_factory",
+    "name": "Turret Factory",
+    "category": "military",
+    "tier": 3,
+    "description": "Specialized high-throughput turret line (optional specialized bay).",
+    "function": "Turret mass production.",
+    "size": [
+      4,
+      5
+    ],
+    "power_kw": 700.0,
+    "power_type": "electrical",
+    "recipe_categories": [
+      "turret_fab"
+    ],
+    "fluid_ports": [],
+    "technology_unlock": "era1_tech_defense_research",
+    "purity_behavior": "N/A",
+    "maintenance": "High power draw.",
+    "upgrade_path": "Mk2",
+    "animation": "Rotary fixtures",
+    "placeable": true
+  },
+  {
+    "id": "era1_machine_wall",
+    "name": "Defensive Wall",
+    "category": "military",
+    "tier": 1,
+    "description": "Defensive Wall",
+    "function": "Defensive Wall",
+    "size": [
+      1,
+      1
+    ],
+    "power_kw": 0,
+    "power_type": "electrical",
+    "recipe_categories": [
+      "defense"
+    ],
+    "fluid_ports": [],
+    "technology_unlock": "era1_tech_defense_industry",
+    "purity_behavior": "",
+    "maintenance": "",
+    "upgrade_path": "",
+    "animation": "",
+    "placeable": true
+  },
+  {
+    "id": "era1_machine_waste_extractor_mk1",
+    "name": "Waste Recovery Extractor Mk1",
+    "category": "extraction",
+    "tier": 1,
+    "description": "Reclaims scattered waste piles / slag fields into processable waste items.",
+    "function": "Extract mixed waste for recovery plants.",
+    "size": [
+      3,
+      3
+    ],
+    "power_kw": 80.0,
+    "power_type": "electrical",
+    "recipe_categories": [
+      "waste_extraction"
+    ],
+    "fluid_ports": [],
+    "technology_unlock": "era1_tech_waste_recovery",
+    "purity_behavior": "Recovered streams start low purity; recovery recipes raise usable fraction.",
+    "maintenance": "Abrasion high; tool wear scales with waste hardness mix.",
+    "upgrade_path": "Mk2 \u2014 selective extraction (choose waste type)",
+    "animation": "Scoop + sorter grate",
+    "placeable": true
+  },
+  {
+    "id": "era1_machine_waste_treatment_plant",
+    "name": "Waste Treatment Plant Mk1",
+    "category": "chemical",
+    "tier": 2,
+    "description": "Neutralizes chemical waste.",
+    "function": "Waste treatment.",
+    "size": [
+      4,
+      3
+    ],
+    "power_kw": 320.0,
+    "power_type": "electrical",
+    "recipe_categories": [
+      "waste_treatment"
+    ],
+    "fluid_ports": [
+      "in:waste",
+      "out:treated"
+    ],
+    "technology_unlock": "era1_tech_waste_recovery",
+    "purity_behavior": "Minor recovery possible.",
+    "maintenance": "Hazard if starved of neutralizer.",
+    "upgrade_path": "Mk2",
+    "animation": "Scrubbers",
+    "placeable": true
+  },
+  {
+    "id": "era1_machine_water_purifier_mk1",
+    "name": "Water Purifier Mk1",
+    "category": "chemical",
+    "tier": 1,
+    "description": "Condensed \u2192 purified water.",
+    "function": "Water purification.",
+    "size": [
+      3,
+      3
+    ],
+    "power_kw": 200.0,
+    "power_type": "electrical",
+    "recipe_categories": [
+      "water_purification"
+    ],
+    "fluid_ports": [
+      "in:water",
+      "out:pure",
+      "out:slurry"
+    ],
+    "technology_unlock": "era1_tech_fluid_engineering",
+    "purity_behavior": "+15 purity.",
+    "maintenance": "Filter clogs.",
+    "upgrade_path": "Precision Water Processor",
+    "animation": "Filter carousel",
+    "placeable": true
+  }
+]

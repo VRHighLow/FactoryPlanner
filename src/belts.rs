@@ -18,6 +18,18 @@ pub struct BeltItem {
     pub item: Item,
     /// 0 = back (entry), 1 = front (exit).
     pub progress: f32,
+    /// Carried purity 0..100 (Era 1 signature system).
+    pub purity: f32,
+}
+
+impl BeltItem {
+    pub fn with_purity(item: Item, progress: f32, purity: f32) -> Self {
+        Self {
+            item,
+            progress,
+            purity,
+        }
+    }
 }
 
 #[derive(Clone, Debug, Default)]
@@ -65,13 +77,11 @@ pub fn tile_center(tx: i32, ty: i32) -> (f32, f32) {
 }
 
 /// Snap a building's top-left so its footprint sits on the tile grid.
-pub fn snap_building_xy(kind: BuildingKind, facing: Facing, cx: f32, cy: f32) -> (f32, f32) {
-    let (bw, bh) = {
-        let (w, h) = kind.size();
-        match facing {
-            Facing::N | Facing::S => (h, w),
-            _ => (w, h),
-        }
+/// `size` is the unrotated footprint (Era machines pass explicit size).
+pub fn snap_building_xy_size(size: (f32, f32), facing: Facing, cx: f32, cy: f32) -> (f32, f32) {
+    let (bw, bh) = match facing {
+        Facing::N | Facing::S => (size.1, size.0),
+        _ => size,
     };
     let tw = (bw / TILE_SIZE).round().max(1.0) as i32;
     let th = (bh / TILE_SIZE).round().max(1.0) as i32;
@@ -192,11 +202,23 @@ fn lane_can_accept(lane: &BeltLane, at_progress: f32) -> bool {
 }
 
 fn try_enter(tile: &mut BeltTile, lane: usize, item: Item, progress: f32) -> bool {
+    try_enter_purity(tile, lane, item, progress, 50.0)
+}
+
+fn try_enter_purity(
+    tile: &mut BeltTile,
+    lane: usize,
+    item: Item,
+    progress: f32,
+    purity: f32,
+) -> bool {
     let lane = lane.min(1);
     if !lane_can_accept(&tile.lanes[lane], progress) {
         return false;
     }
-    tile.lanes[lane].items.push(BeltItem { item, progress });
+    tile.lanes[lane]
+        .items
+        .push(BeltItem::with_purity(item, progress, purity));
     true
 }
 
@@ -531,6 +553,9 @@ impl World {
         let Some(n) = self.nodes.get(&bid) else {
             return false;
         };
+        if n.held {
+            return false;
+        }
         let has_input = n
             .ports
             .iter()
@@ -566,31 +591,69 @@ impl World {
         let Some(n) = self.nodes.get_mut(&id) else {
             return false;
         };
-        match (n.kind, item) {
-            (BuildingKind::Smelter, Item::IronOre) if n.in_ore + 1.0 <= NODE_BUFFER => {
-                n.in_ore += 1.0;
-                true
+        if n.held {
+            return false;
+        }
+        // Filtered item inputs (e.g. ballistic ammo port).
+        let item_ok = n.ports.iter().any(|p| match p.kind {
+            PortKind::ItemIn(want) => want == item,
+            PortKind::AnyIn => true,
+            _ => false,
+        });
+        let has_item_in = n
+            .ports
+            .iter()
+            .any(|p| matches!(p.kind, PortKind::ItemIn(_) | PortKind::AnyIn));
+        if has_item_in && !item_ok && matches!(n.kind, BuildingKind::BallisticTurret) {
+            return false;
+        }
+        if let Some(f) = n.fluid_filter {
+            if item.is_fluid() && item != f {
+                return false;
             }
-            (BuildingKind::Box, Item::IronOre) => {
-                n.store_ore += 1.0;
-                true
+        }
+        match n.kind {
+            BuildingKind::Smelter
+            | BuildingKind::Assembler
+            | BuildingKind::Machine
+            | BuildingKind::Lab
+            | BuildingKind::Box
+            | BuildingKind::NexusSite
+            | BuildingKind::BallisticTurret
+            | BuildingKind::FluidTank => {
+                if item.is_fluid() && !matches!(n.kind, BuildingKind::FluidTank | BuildingKind::Machine | BuildingKind::Lab | BuildingKind::Smelter | BuildingKind::Assembler) {
+                    return false;
+                }
+                if n.stock(item) + 1.0 <= NODE_BUFFER {
+                    if n.fluid_filter.is_none() && item.is_fluid() {
+                        n.fluid_filter = Some(item);
+                    }
+                    n.add_stock(item, 1.0);
+                    true
+                } else {
+                    false
+                }
             }
-            (BuildingKind::Box, Item::IronIngot) => {
-                n.store_ingot += 1.0;
-                true
-            }
-            (BuildingKind::Splitter, Item::IronOre) if n.buf_ore + 1.0 <= NODE_BUFFER => {
-                let lane = from_lane.unwrap_or(0).min(1);
-                n.split_ore[lane] = n.split_ore[lane].saturating_add(1);
-                n.buf_ore = (n.split_ore[0] + n.split_ore[1]) as f32;
-                true
-            }
-            (BuildingKind::Splitter, Item::IronIngot) if n.buf_ingot + 1.0 <= NODE_BUFFER => {
-                let lane = from_lane.unwrap_or(0).min(1);
-                n.split_ingot[lane] = n.split_ingot[lane].saturating_add(1);
-                n.buf_ingot = (n.split_ingot[0] + n.split_ingot[1]) as f32;
-                true
-            }
+            BuildingKind::Splitter => match item {
+                Item::IronOre if n.buf_ore + 1.0 <= NODE_BUFFER => {
+                    let lane = from_lane.unwrap_or(0).min(1);
+                    n.split_ore[lane] = n.split_ore[lane].saturating_add(1);
+                    n.buf_ore = (n.split_ore[0] + n.split_ore[1]) as f32;
+                    true
+                }
+                Item::IronIngot if n.buf_ingot + 1.0 <= NODE_BUFFER => {
+                    let lane = from_lane.unwrap_or(0).min(1);
+                    n.split_ingot[lane] = n.split_ingot[lane].saturating_add(1);
+                    n.buf_ingot = (n.split_ingot[0] + n.split_ingot[1]) as f32;
+                    true
+                }
+                // Any other solid — park in generic stocks (single-type-per-lane soft).
+                other if !other.is_fluid() && n.stock(other) + 1.0 <= NODE_BUFFER => {
+                    n.add_stock(other, 1.0);
+                    true
+                }
+                _ => false,
+            },
             _ => false,
         }
     }
@@ -602,6 +665,9 @@ impl World {
                 continue;
             };
             if n.kind.is_cable() {
+                continue;
+            }
+            if n.held {
                 continue;
             }
             // Splitter: alternate evenly between the two front outputs.
@@ -783,21 +849,114 @@ impl World {
                 n.split_ingot[lane] = n.split_ingot[lane].saturating_add(1);
                 n.buf_ingot = (n.split_ingot[0] + n.split_ingot[1]) as f32;
             }
+            // Splitter only balances iron for now.
+            _ => {}
         }
     }
 
     fn take_output_item(&mut self, id: u32, prefer: Option<Item>) -> Option<Item> {
         let n = self.nodes.get_mut(&id)?;
+        if n.kind == BuildingKind::OreNode {
+            if n.out_ore >= 1.0 {
+                let item = n.mine_item.unwrap_or(Item::IronOre);
+                if prefer.is_none() || prefer == Some(item) {
+                    n.out_ore -= 1.0;
+                    return Some(item);
+                }
+            }
+            return None;
+        }
+        if matches!(
+            n.kind,
+            BuildingKind::Smelter
+                | BuildingKind::Assembler
+                | BuildingKind::Machine
+                | BuildingKind::Lab
+                | BuildingKind::Box
+                | BuildingKind::NexusSite
+        ) {
+            if n.era_craft {
+                if let Some(want) = prefer {
+                    if n.stock(want) >= 1.0 {
+                        let _ = n.try_take_stock(want, 1.0);
+                        return Some(want);
+                    }
+                }
+                if n.craft_recipe != 0 {
+                    if let Some(r) = crate::content::content().recipe(n.craft_recipe) {
+                        for io in r.all_outputs() {
+                            let item = Item::from_u16(io.item);
+                            if !item.is_fluid() && n.stock(item) >= 1.0 {
+                                let _ = n.try_take_stock(item, 1.0);
+                                return Some(item);
+                            }
+                        }
+                    }
+                }
+                // Any solid stock
+                for (i, &v) in n.stocks.iter().enumerate() {
+                    if v >= 1.0 {
+                        let item = Item::from_u16(i as u16);
+                        if !item.is_fluid() {
+                            let _ = n.try_take_stock(item, 1.0);
+                            return Some(item);
+                        }
+                    }
+                }
+                return None;
+            }
+            if matches!(n.kind, BuildingKind::Smelter | BuildingKind::Assembler) {
+                let machine = if n.kind == BuildingKind::Smelter {
+                    crate::recipes::MachineKind::Smelt
+                } else {
+                    crate::recipes::MachineKind::Assemble
+                };
+                let craft_recipe = n.craft_recipe;
+                if let Some(want) = prefer {
+                    if crate::recipes::item_is_machine_output(machine, want) && n.stock(want) >= 1.0 {
+                        let _ = n.try_take_stock(want, 1.0);
+                        return Some(want);
+                    }
+                }
+                if craft_recipe != 0 {
+                    if let Some(r) = crate::recipes::recipe_by_id(craft_recipe) {
+                        for &(item, _) in r.outputs {
+                            if n.stock(item) >= 1.0 {
+                                let _ = n.try_take_stock(item, 1.0);
+                                return Some(item);
+                            }
+                        }
+                    }
+                }
+                for r in crate::recipes::recipes_for(machine) {
+                    for &(item, _) in r.outputs {
+                        if n.stock(item) >= 1.0 {
+                            let _ = n.try_take_stock(item, 1.0);
+                            return Some(item);
+                        }
+                    }
+                }
+            }
+            // Generic stock pull for box / machine
+            if let Some(want) = prefer {
+                if n.stock(want) >= 1.0 {
+                    let _ = n.try_take_stock(want, 1.0);
+                    return Some(want);
+                }
+            }
+            for (i, &v) in n.stocks.iter().enumerate() {
+                if v >= 1.0 {
+                    let item = Item::from_u16(i as u16);
+                    if !item.is_fluid() {
+                        let _ = n.try_take_stock(item, 1.0);
+                        return Some(item);
+                    }
+                }
+            }
+            return None;
+        }
         if let Some(want) = prefer {
             match want {
-                Item::IronOre if n.out_ore >= 1.0 => {
-                    n.out_ore -= 1.0;
-                    return Some(Item::IronOre);
-                }
-                Item::IronIngot if n.out_ingot >= 1.0 => {
-                    n.out_ingot -= 1.0;
-                    return Some(Item::IronIngot);
-                }
                 Item::IronOre if n.buf_ore >= 1.0 => {
                     n.buf_ore -= 1.0;
                     return Some(Item::IronOre);
@@ -806,20 +965,28 @@ impl World {
                     n.buf_ingot -= 1.0;
                     return Some(Item::IronIngot);
                 }
+                Item::IronOre if n.out_ore >= 1.0 => {
+                    n.out_ore -= 1.0;
+                    return Some(Item::IronOre);
+                }
+                Item::IronIngot if n.out_ingot >= 1.0 => {
+                    n.out_ingot -= 1.0;
+                    return Some(Item::IronIngot);
+                }
                 _ => {}
             }
         }
-        if n.out_ore >= 1.0 {
-            n.out_ore -= 1.0;
-            Some(Item::IronOre)
-        } else if n.out_ingot >= 1.0 {
-            n.out_ingot -= 1.0;
-            Some(Item::IronIngot)
-        } else if n.buf_ore >= 1.0 {
+        if n.buf_ore >= 1.0 {
             n.buf_ore -= 1.0;
             Some(Item::IronOre)
         } else if n.buf_ingot >= 1.0 {
             n.buf_ingot -= 1.0;
+            Some(Item::IronIngot)
+        } else if n.out_ore >= 1.0 {
+            n.out_ore -= 1.0;
+            Some(Item::IronOre)
+        } else if n.out_ingot >= 1.0 {
+            n.out_ingot -= 1.0;
             Some(Item::IronIngot)
         } else {
             None
@@ -830,19 +997,33 @@ impl World {
         let Some(n) = self.nodes.get_mut(&id) else {
             return;
         };
-        match (n.kind, item) {
-            (BuildingKind::OreNode, Item::IronOre) => n.out_ore += 1.0,
-            (BuildingKind::Smelter, Item::IronIngot) => n.out_ingot += 1.0,
-            (BuildingKind::Splitter, Item::IronOre) => {
-                n.split_ore[0] = n.split_ore[0].saturating_add(1);
-                n.buf_ore = (n.split_ore[0] + n.split_ore[1]) as f32;
+        match n.kind {
+            BuildingKind::OreNode => n.out_ore += 1.0,
+            BuildingKind::Smelter
+            | BuildingKind::Assembler
+            | BuildingKind::Machine
+            | BuildingKind::Lab
+            | BuildingKind::Box
+            | BuildingKind::NexusSite
+            | BuildingKind::BallisticTurret => {
+                n.add_stock(item, 1.0);
             }
-            (BuildingKind::Splitter, Item::IronIngot) => {
-                n.split_ingot[0] = n.split_ingot[0].saturating_add(1);
-                n.buf_ingot = (n.split_ingot[0] + n.split_ingot[1]) as f32;
-            }
-            (_, Item::IronOre) => n.buf_ore += 1.0,
-            (_, Item::IronIngot) => n.buf_ingot += 1.0,
+            BuildingKind::Splitter => match item {
+                Item::IronOre => {
+                    n.split_ore[0] = n.split_ore[0].saturating_add(1);
+                    n.buf_ore = (n.split_ore[0] + n.split_ore[1]) as f32;
+                }
+                Item::IronIngot => {
+                    n.split_ingot[0] = n.split_ingot[0].saturating_add(1);
+                    n.buf_ingot = (n.split_ingot[0] + n.split_ingot[1]) as f32;
+                }
+                _ => {}
+            },
+            _ => match item {
+                Item::IronOre => n.buf_ore += 1.0,
+                Item::IronIngot => n.buf_ingot += 1.0,
+                _ => n.add_stock(item, 1.0),
+            },
         }
     }
 }

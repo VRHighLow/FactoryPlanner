@@ -1,0 +1,38 @@
+---
+description: Multiplayer-first design; desktop now, mobile/console later
+alwaysApply: true
+---
+
+# FactoryPlanner — multiplayer-first, multi-platform later
+
+From this point on, **every new system and feature is designed for multiplayer**, not bolted on later.
+
+## Platforms
+
+**Ship / support first:** Windows, macOS, Linux (native desktop builds via existing GitHub release CI).
+
+**Later (keep architecture open, don’t block on them now):** mobile and console.
+
+Implications while coding desktop features:
+- Keep **sim / world / net** free of OS-specific or desktop-only assumptions (no hard dependency on mouse-only, keyboard-only, or filesystem paths outside a thin platform layer).
+- Prefer **fixed UPS** world logic + separate render/input (already the pattern) so touch/gamepad can map later.
+- Avoid desktop-only crates in core sim/net; confine windowing, FS saves, and input to edges (`main`, save IO, settings).
+- Don’t invent mobile/console UIs yet — just don’t paint into a corner (e.g. huge keyboard-chord-only flows without a command/action layer).
+
+## Multiplayer rules for new work
+
+When adding or changing anything that affects shared world state:
+
+1. **Host authority** — clients request; host applies; host broadcasts (or equivalent authoritative path already in `net.rs`).
+2. **Sync in the same change** — if it can desync two clients (belts, items, inventories, combat, saves, placement), wire net/snapshot/save fields in the **same effort**, not “SP now, MP later.”
+3. **Deterministic sim where possible** — fixed `TARGET_UPS` / `FIXED_DT`; don’t hide gameplay in render-only frame dt.
+4. **Snapshots & saves** — new state belongs in capture/apply + host snapshot path, not only local memory.
+5. **SP is a single-player host** mentally — same code paths, not a divergent parallel sim.
+6. **Local-only is OK only for pure UX** — camera feel, local FX, settings UI, toasts — never for world truth.
+
+## Explicitly out of scope until asked
+
+- Finishing reconnect/chat/shared-pause polish as big standalone projects
+- Mobile/console ports, stores, or touch/gamepad schemes
+
+When unsure whether something is world state: **assume it is**, and ask how it should replicate before merging SP-only behavior.
